@@ -24,6 +24,9 @@ recording was processed**.
 - Explicit unit harmonization (`units.py`): EEG/EOG/EMG → uV, ECG → mV, SpO2 → %
   (fraction→percent only when confirmed), RESP/AIRFLOW unconverted. Original
   units and conversion status are kept as non-predictor `unit_*` metadata.
+- Unit-aware feature eligibility: amplitude features from unknown/incompatible
+  EEG/ECG/EOG/EMG/SpO2 channels and RESP/AIRFLOW signal-range features are gated
+  out of model matrices; unit-invariant features remain eligible.
 - Non-finite gaps split contiguous segments; ECG/respiratory features are not
   computed across gaps.
 - Bootstrap is a true patient-cluster bootstrap and CIs are integrated into fold
@@ -74,11 +77,11 @@ standalone `demographics.csv`. No hidden validation/test labels were accessed.
 
 ## Test results
 
-- `python -m pytest` → **120 passed, 0 failed, 0 skipped** (synthetic fixtures only;
+- `python -m pytest` → **136 passed, 0 failed, 0 skipped** (synthetic fixtures only;
   includes synthetic EDFs, end-to-end join + CLI, chunk-read/no-`.data` test, gap
   tests, official-scorer differential tests, bootstrap cluster test, airflow/SpO2
-  feature-selection tests, incomplete-identity counting tests and V/mV/uV unit
-  equivalence tests).
+  feature-selection tests, incomplete-identity counting tests, V/mV/uV unit
+  equivalence tests and unit-aware feature-eligibility tests).
 - `ruff check .` → **All checks passed!**
 - CLI smoke tests for all scripts passed on synthetic data; site-held-out
   evaluation produced 3 folds × 6 models with integrated patient bootstrap CIs.

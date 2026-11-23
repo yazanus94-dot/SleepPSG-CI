@@ -189,7 +189,8 @@ def extract_from_edf(
     by_modality: dict[str, dict[str, dict[str, float]]] = {}
     unit_records: dict[str, str | float] = {}
     unit_counts: dict[str, dict[str, int]] = {
-        modality: {"unknown": 0, "converted": 0} for modality in EXPECTED_MODALITIES
+        modality: {"unknown": 0, "converted": 0, "harmonized": 0, "channels": 0}
+        for modality in EXPECTED_MODALITIES
     }
     with EdfChunkReader(edf_path) as reader:
         duration = reader.duration_seconds
@@ -216,10 +217,16 @@ def extract_from_edf(
                 f"unit_status_{prefix}_{token}": handling.status,
                 f"unit_scale_{prefix}_{token}": float(handling.scale_factor),
             })
+            counts = unit_counts[modality]
+            counts["channels"] += 1
             if handling.status in {"unknown", "flagged"}:
-                unit_counts[modality]["unknown"] += 1
+                counts["unknown"] += 1
             if handling.status == "converted":
-                unit_counts[modality]["converted"] += 1
+                counts["converted"] += 1
+            # RESP/AIRFLOW are never converted by this pipeline, so their
+            # amplitude features are not eligible for cross-site models.
+            if handling.status in {"native", "converted"}:
+                counts["harmonized"] += 1
 
             kwargs: dict = {"unit": original_unit}
             if modality == "SPO2":
@@ -243,8 +250,12 @@ def extract_from_edf(
     features: dict[str, str | float] = {}
     for modality in EXPECTED_MODALITIES:
         features.update(_aggregate_channels(by_modality.get(modality, {}), modality))
-        features[f"unit_unknown_channels_{modality.lower()}"] = float(unit_counts[modality]["unknown"])
-        features[f"unit_converted_channels_{modality.lower()}"] = float(unit_counts[modality]["converted"])
+        counts = unit_counts[modality]
+        features[f"unit_unknown_channels_{modality.lower()}"] = float(counts["unknown"])
+        features[f"unit_converted_channels_{modality.lower()}"] = float(counts["converted"])
+        features[f"unit_harmonized_{modality.lower()}"] = float(
+            counts["channels"] > 0 and counts["harmonized"] == counts["channels"]
+        )
     features["n_verified_modalities"] = float(
         sum(1 for modality in EXPECTED_MODALITIES if by_modality.get(modality))
     )

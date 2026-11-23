@@ -141,8 +141,21 @@ Six scikit-learn pipelines with fold-local imputation/scaling: `dummy`,
 missing sex values remain NaN until the training-fold imputer handles them.
 After the modality-selection fix, **all supported signal feature families**
 (`eeg_`, `ecg_`, `resp_`, `airflow_`, `emg_`, `eog_`, `spo2_` and `missing_`
-indicators) enter the signal-only and combined matrices; identifiers, recording
-names, labels and unit-provenance columns never do.
+indicators) are candidates for the signal-only and combined matrices; identifiers,
+recording names, labels and unit-provenance columns never are.
+
+**Unit-aware eligibility gate.** `units.is_feature_eligible` filters candidates
+before matrix construction: amplitude-dependent EEG/ECG/EOG/EMG/SpO2 features are
+dropped when any contributing channel has an unknown/incompatible unit; SpO2's
+90%-threshold fraction is dropped without a confirmed percent scale; and
+`resp_signal_range`/`airflow_signal_range` are dropped unless those units were
+explicitly harmonized (the default pipeline never harmonizes them). Explicitly
+unit-invariant features (band-power ratios/relative powers, entropy, spectral
+edge, time-domain HRV, activity fraction, blink counts, respiratory rate/CV/
+regularity) and missingness indicators remain eligible. Excluded features simply
+do not enter the matrix; any remaining gaps are handled by the training-fold
+imputer. Nothing is silently converted or guessed, and `unit_*` columns remain
+provenance metadata only.
 
 ## 8. Patient/site validation and metrics
 

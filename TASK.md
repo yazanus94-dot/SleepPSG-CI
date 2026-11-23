@@ -57,8 +57,15 @@ units converted only when header/values confirm 0..1). RESP/AIRFLOW units are
 source-specific and unconverted; only unit-invariant features are interpreted
 and `resp_signal_range` must not be compared across sites. Unknown units are
 flagged, never silently equated. Original units and conversion status are kept
-as `unit_*` provenance metadata and are excluded from model predictors. No real
-EDF recordings have been processed, so cross-site unit harmonization is unvalidated.
+as `unit_*` provenance metadata and are excluded from model predictors.
+
+Predictor eligibility is enforced before matrix construction: amplitude-dependent
+features from channels with unknown/incompatible units are excluded, SpO2
+thresholds require a confirmed percent scale, and RESP/AIRFLOW signal-range
+features are excluded unless harmonized. Unit-invariant features and missingness
+indicators remain eligible; remaining gaps are handled by fold-local imputation.
+No real EDF recordings have been processed, so cross-site unit harmonization is
+unvalidated.
 
 ## Validation
 

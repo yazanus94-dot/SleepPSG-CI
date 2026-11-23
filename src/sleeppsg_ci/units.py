@@ -35,6 +35,26 @@ CANONICAL_UNITS: dict[str, str] = {
 }
 VOLTAGE_MODALITIES = frozenset({"EEG", "EOG", "EMG", "ECG"})
 UNCONVERTED_MODALITIES = frozenset({"RESP", "AIRFLOW"})
+MODALITY_PREFIXES: dict[str, str] = {
+    "EEG": "eeg", "ECG": "ecg", "RESP": "resp", "AIRFLOW": "airflow",
+    "EMG": "emg", "EOG": "eog", "SPO2": "spo2",
+}
+
+# Structural bookkeeping is never a physiological amplitude predictor.
+UNIT_STRUCTURAL_TOKENS = (
+    "unit_", "missing_", "n_channels_", "n_verified", "signal_duration_seconds",
+    "_n_samples", "_nonfinite_fraction", "_n_gaps", "_n_segments",
+    "_features_valid", "_n_epochs", "_n_excluded_epochs", "_n_beats", "_beat_quality",
+)
+# Features whose numerical scale does not depend on the signal's physical unit.
+# Each inclusion is scientifically justified; everything else is treated as
+# amplitude-dependent and gated by unit provenance.
+UNIT_INVARIANT_TOKENS = (
+    "_relative", "_ratio", "spectral_entropy", "spectral_edge_95",
+    "activity_fraction", "spectral_centroid", "slow_fast_ratio", "blink_like_events",
+    "rate_bpm", "amplitude_cv", "regularity", "_mean_hr", "_median_hr", "_mean_rr",
+    "sdnn", "rmssd", "pnn50", "below_90_fraction",
+)
 
 # Conversion factor from each recognised unit to microvolts.
 _VOLTAGE_TO_UV: dict[str, float] = {
@@ -176,3 +196,66 @@ def unit_feature_flags(prefix: str, handling: UnitHandling | None) -> dict[str, 
         f"unit_{prefix}_unknown": float(handling.status in {"unknown", "flagged"}),
         f"unit_{prefix}_unconverted": float(handling.status == "unconverted"),
     }
+
+
+def feature_modality(name: str) -> str | None:
+    """Return the modality a feature column belongs to, or ``None``."""
+    lower = str(name).casefold()
+    for modality, prefix in MODALITY_PREFIXES.items():
+        if lower.startswith(f"{prefix}_"):
+            return modality
+    return None
+
+
+def is_unit_invariant_feature(name: str) -> bool:
+    """True for structural or explicitly unit-invariant features.
+
+    Band-power *ratios*, relative powers, entropy/edge frequency, time-domain
+    HRV, activity fractions, event counts and respiratory rate/CV/regularity do
+    not depend on the signal's amplitude scale. ``below_90_fraction`` is
+    invariant only on a confirmed percent scale (see
+    :func:`is_feature_eligible`).
+    """
+    lower = str(name).casefold()
+    if any(token in lower for token in UNIT_STRUCTURAL_TOKENS):
+        return True
+    return any(token in lower for token in UNIT_INVARIANT_TOKENS)
+
+
+def is_amplitude_dependent_feature(name: str) -> bool:
+    """True when a feature's value scales with the physical signal amplitude."""
+    return not is_unit_invariant_feature(name)
+
+
+def is_feature_eligible(
+    name: str,
+    *,
+    modality: str | None = None,
+    unit_unknown: bool = False,
+    unit_harmonized: bool = False,
+) -> bool:
+    """Decide whether one feature may enter a cross-site model matrix.
+
+    Rules
+    -----
+    * Structural bookkeeping and explicitly invariant features stay eligible.
+    * A SpO2 90%-threshold fraction needs a confirmed percent scale.
+    * RESP/AIRFLOW ``*_signal_range`` is unit-dependent and eligible only when
+      those units were explicitly harmonized (the default pipeline never does).
+    * Amplitude-dependent EEG/EOG/EMG/ECG/SpO2 features are excluded whenever
+      any contributing channel had an unknown or incompatible unit.
+    """
+    resolved = modality or feature_modality(name)
+    lower = str(name).casefold()
+
+    if is_unit_invariant_feature(name):
+        if resolved == "SPO2" and unit_unknown and "below_90_fraction" in lower:
+            return False
+        return True
+
+    if resolved in UNCONVERTED_MODALITIES and "_signal_range" in lower:
+        return unit_harmonized
+
+    if unit_unknown and (resolved in VOLTAGE_MODALITIES or resolved == "SPO2"):
+        return False
+    return True

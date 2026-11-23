@@ -7,6 +7,7 @@ import json
 from collections.abc import Sequence
 
 import numpy as np
+import pandas as pd
 from sklearn.dummy import DummyClassifier
 from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
 from sklearn.impute import SimpleImputer
@@ -15,6 +16,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from .cohort import FORBIDDEN_PREDICTORS
+from .units import feature_modality, is_feature_eligible
 
 RANDOM_SEED = 42
 DEMOGRAPHIC_FEATURES = ("Age", "BMI", "Sex_male")
@@ -40,10 +42,49 @@ def assert_no_leakage(feature_names: Sequence[str]) -> None:
             raise LeakageError(f"Forbidden or post-PSG predictor '{name}' detected.")
 
 
+def _max_frame_flag(frame, name: str, default: float = 0.0) -> float:
+    """Conservative max of a per-row unit flag (any bad row disqualifies)."""
+    if name not in frame.columns:
+        return default
+    values = pd.to_numeric(frame[name], errors="coerce").dropna()
+    return float(values.max()) if not values.empty else default
+
+
+def _min_frame_flag(frame, name: str, default: float = 0.0) -> float:
+    """Conservative min of a per-row flag (all rows must be good)."""
+    if name not in frame.columns:
+        return default
+    values = pd.to_numeric(frame[name], errors="coerce").dropna()
+    return float(values.min()) if not values.empty else default
+
+
+def eligible_signal_columns(frame, columns: Sequence[str]) -> list[str]:
+    """Drop features that are not eligible under their channel's unit status.
+
+    Unit provenance stays metadata: it is consumed here for eligibility only
+    and never included as a predictor column.
+    """
+    eligible: list[str] = []
+    for column in columns:
+        modality = feature_modality(column)
+        unknown = False
+        harmonized = False
+        if modality:
+            lower = modality.casefold()
+            unknown = (
+                _max_frame_flag(frame, f"unit_unknown_channels_{lower}") > 0
+                or _max_frame_flag(frame, f"unit_{lower}_unknown") > 0
+            )
+            harmonized = _min_frame_flag(frame, f"unit_harmonized_{lower}") == 1.0
+        if is_feature_eligible(
+            column, modality=modality, unit_unknown=unknown, unit_harmonized=harmonized
+        ):
+            eligible.append(column)
+    return eligible
+
+
 def encode_demographics(frame) -> "object":
     """Return numeric baseline demographics only (no identifiers or outcomes)."""
-    import pandas as pd
-
     output = pd.DataFrame(index=frame.index)
     output["Age"] = pd.to_numeric(frame.get("Age"), errors="coerce")
     output["BMI"] = pd.to_numeric(frame.get("BMI"), errors="coerce")
@@ -61,14 +102,13 @@ def encode_demographics(frame) -> "object":
 
 
 def select_feature_matrix(frame, model_kind: str) -> "object":
-    """Select an allowed feature subset for a named baseline."""
-    import pandas as pd
-
+    """Select an allowed, unit-eligible feature subset for a named baseline."""
     demo = encode_demographics(frame)
-    signal_columns = [
+    candidates = [
         column for column in frame.columns
         if column.startswith(SIGNAL_PREFIXES) and column not in demo.columns
     ]
+    signal_columns = eligible_signal_columns(frame, candidates)
     signals = frame[signal_columns].apply(pd.to_numeric, errors="coerce") if signal_columns else pd.DataFrame(index=frame.index)
     if model_kind == "none":
         # The dummy baseline uses no features; keep an explicit neutral column.
