@@ -38,6 +38,8 @@ class EdfChunkReader:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self._edf = None
+        self._channel_map_cache: dict[str, object] | None = None
+        self._original_labels_cache: dict[str, str] | None = None
 
     def __enter__(self) -> "EdfChunkReader":
         try:
@@ -54,6 +56,8 @@ class EdfChunkReader:
 
     def __exit__(self, exc_type, exc, tb) -> None:
         self._edf = None
+        self._channel_map_cache = None
+        self._original_labels_cache = None
 
     @property
     def edf(self):
@@ -66,14 +70,49 @@ class EdfChunkReader:
         """Header-derived recording duration; no signal samples are read."""
         return float(self.edf.duration)
 
+    def _channel_map(self) -> dict[str, object]:
+        """Map unique display labels to signals, disambiguating duplicates.
+
+        Real EDF files can repeat a label (e.g. two channels both named ``EEG``).
+        Collapsing them would silently discard a channel, so later duplicates
+        get a deterministic ``__2``, ``__3`` suffix. The raw label is retained in
+        :meth:`original_channel_labels` for provenance.
+        """
+        if self._channel_map_cache is None or self._original_labels_cache is None:
+            mapping: dict[str, object] = {}
+            originals: dict[str, str] = {}
+            counts: dict[str, int] = {}
+            for signal in self.edf.signals:
+                raw = str(signal.label).strip() or f"CH{len(mapping) + 1}"
+                counts[raw] = counts.get(raw, 0) + 1
+                display = raw if counts[raw] == 1 else f"{raw}__{counts[raw]}"
+                mapping[display] = signal
+                originals[display] = raw
+            self._channel_map_cache = mapping
+            self._original_labels_cache = originals
+        return self._channel_map_cache
+
     def channels(self) -> list[str]:
-        return [str(signal.label).strip() for signal in self.edf.signals]
+        return list(self._channel_map())
+
+    def original_channel_labels(self) -> dict[str, str]:
+        """Map disambiguated display labels back to the raw EDF labels."""
+        self._channel_map()
+        assert self._original_labels_cache is not None
+        return dict(self._original_labels_cache)
+
+    def duplicate_channel_labels(self) -> list[str]:
+        """Raw labels that occurred more than once in the EDF header."""
+        counts: dict[str, int] = {}
+        for raw in self.original_channel_labels().values():
+            counts[raw] = counts.get(raw, 0) + 1
+        return sorted(label for label, count in counts.items() if count > 1)
 
     def _signal(self, label: str):
-        for signal in self.edf.signals:
-            if str(signal.label).strip() == label:
-                return signal
-        raise EdfReadError(f"Channel '{label}' not found in {self.path.name}")
+        try:
+            return self._channel_map()[label]
+        except KeyError as exc:
+            raise EdfReadError(f"Channel '{label}' not found in {self.path.name}") from exc
 
     def sampling_rate(self, label: str) -> float:
         return float(self._signal(label).sampling_frequency)
@@ -155,12 +194,18 @@ class EdfChunkReader:
         def generator() -> Iterator[np.ndarray]:
             # Buffer across chunks so a chunk smaller than one epoch still
             # contributes. Epoch boundaries are anchored at sample 0, making
-            # the yielded epochs identical for every chunk size.
+            # the yielded epochs identical for every chunk size. Yielding is
+            # capped at the header-derived count so a duration/sample-count
+            # mismatch can never produce more epochs than were declared.
             buffer = np.empty(0, dtype=float)
+            yielded = 0
             for _, samples in self.iter_chunks(label, chunk_seconds):
                 buffer = np.concatenate([buffer, samples]) if buffer.size else samples
-                while buffer.size >= epoch_samples:
+                while buffer.size >= epoch_samples and yielded < n_epochs:
                     yield buffer[:epoch_samples].copy()
                     buffer = buffer[epoch_samples:]
+                    yielded += 1
+                if yielded >= n_epochs:
+                    break
 
         return generator(), info

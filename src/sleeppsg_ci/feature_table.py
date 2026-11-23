@@ -194,8 +194,12 @@ def extract_from_edf(
     }
     with EdfChunkReader(edf_path) as reader:
         duration = reader.duration_seconds
+        originals = reader.original_channel_labels()
         for channel in reader.channels():
-            modality = resolve_modality(channel, rules, site=site)
+            # Resolve from the raw EDF label: a disambiguated display label
+            # (e.g. EEG__2) must still match a verified rule for EEG.
+            raw_label = originals.get(channel, channel)
+            modality = resolve_modality(raw_label, rules, site=site)
             if modality not in EXTRACTORS:
                 continue
             fs = reader.sampling_rate(channel)
@@ -216,6 +220,7 @@ def extract_from_edf(
                 f"unit_canonical_{prefix}_{token}": handling.canonical_unit,
                 f"unit_status_{prefix}_{token}": handling.status,
                 f"unit_scale_{prefix}_{token}": float(handling.scale_factor),
+                f"unit_raw_channel_{prefix}_{token}": reader.original_channel_labels().get(channel, channel),
             })
             counts = unit_counts[modality]
             counts["channels"] += 1

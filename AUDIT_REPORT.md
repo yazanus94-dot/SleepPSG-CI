@@ -1,9 +1,10 @@
-# Audit report — SleepPSG-CI (final corrective sprint)
+# Audit report — SleepPSG-CI (real-data readiness sprint)
 
-Inspection date: **2026-11-23**. Previous commit: `a974e67...`.
+Inspection date: **2026-11-23**. Baseline commit: `48bfcdd...`.
 Status: software implemented and tested on synthetic fixtures; **no real-data
 experiments were run, no clinical model performance was measured, and no real EDF
-recording was processed**.
+recording was processed**. This sprint verified access, fixed two reproducible
+real-data defects, and prepared the experiment entry point.
 
 ## Work completed
 
@@ -40,6 +41,28 @@ recording was processed**.
   explicit.
 - Pyproject metadata updated to PEP 639 (`setuptools>=77`, SPDX `MIT`).
 
+### This sprint (real-data readiness)
+
+- Pulled `main`, confirmed clean tree at `48bfcdd`, re-ran 136 tests and Ruff, and
+  confirmed the unit-safety gate is still present.
+- Verified the public Kaggle metadata/file inventory and located `demographics.csv`
+  at **131,863 bytes** (well under the 500 MiB cap). No file was downloaded.
+- Fixed a reproducible real-data defect: duplicate EDF channel labels (e.g. two
+  channels both named `EEG`) previously collapsed into one channel, silently
+  discarding a recording. Labels are now deterministically disambiguated
+  (`EEG`, `EEG__2`), raw labels are preserved for provenance, and modality rules
+  resolve against the raw label.
+- Fixed a reproducible epoch-count inconsistency: the epoch generator is now
+  capped at the header-derived epoch count so a duration/sample mismatch cannot
+  report more epochs than declared.
+- Strengthened `scripts/evaluate_models.py` into the real-data experiment entry
+  point: it accepts only `S0001`/`I0002`/`I0006`, rejects hidden/unknown sources,
+  records SHA-256 input checksums, writes an explicit evaluation contract and
+  separate manifest, and keeps the existing patient-grouped, δ = 2, bootstrap
+  evaluation unchanged.
+- Added regression tests for duplicate labels, epoch capping, source validation,
+  provenance and the experiment contract.
+
 ## Files inspected
 
 Official reference material (read-only): `project-4-physionet-2026-psg-cognitive-impairment/evaluate_model.py`
@@ -57,13 +80,28 @@ scaffold was created from the documented specification in the prior commit.
 | Public metadata API reachable | Yes (unauthenticated) |
 | Small training set size | 230,024,509,878 bytes (~214 GiB) |
 | Large training set size | ~1.2 TiB |
-| Kaggle credentials configured | No |
+| `demographics.csv` size | **131,863 bytes** (public file inventory, 2026-11-23) |
+| Kaggle credentials configured | No (`KAGGLE_USERNAME`, `KAGGLE_KEY`, `KAGGLE_CONFIG_DIR` unset) |
 | `kaggle` CLI installed | No |
+| BDSP terms acceptance verified | Not possible without authenticated account |
 | Dataset content downloaded | **None** |
 | Real EDF recordings processed | **None** |
 
-Blocker: Kaggle credentials and BDSP terms acceptance are required even for the
-standalone `demographics.csv`. No hidden validation/test labels were accessed.
+Blocker: Kaggle credentials and the user's own acceptance of the BDSP terms are
+required even for the standalone `demographics.csv`. Terms were **not** accepted
+on anyone's behalf and no authentication was bypassed. No hidden validation/test
+labels were accessed.
+
+**Phase 3 outcome:** no real metadata audit was performed because the file was
+not legitimately retrievable; no results were fabricated. The privacy-safe audit
+command is ready and documented.
+
+**Exact next user action:** log into the Kaggle account, open
+https://www.kaggle.com/datasets/physionet/physionetchallenge2026data, accept the
+BDSP Credentialed Health Data License v1.0.0 personally, create a Kaggle API
+token, install the `kaggle` CLI, configure `KAGGLE_USERNAME`/`KAGGLE_KEY`, then
+run `python scripts/inventory_dataset.py` and the documented single-file
+download followed by `python scripts/audit_metadata.py data/demographics.csv`.
 
 ## Exact verified counts
 
@@ -77,11 +115,12 @@ standalone `demographics.csv`. No hidden validation/test labels were accessed.
 
 ## Test results
 
-- `python -m pytest` → **136 passed, 0 failed, 0 skipped** (synthetic fixtures only;
+- `python -m pytest` → **144 passed, 0 failed, 0 skipped** (synthetic fixtures only;
   includes synthetic EDFs, end-to-end join + CLI, chunk-read/no-`.data` test, gap
   tests, official-scorer differential tests, bootstrap cluster test, airflow/SpO2
   feature-selection tests, incomplete-identity counting tests, V/mV/uV unit
-  equivalence tests and unit-aware feature-eligibility tests).
+  equivalence tests, unit-aware feature-eligibility tests, duplicate-label and
+  epoch-cap regressions, and experiment source/provenance tests).
 - `ruff check .` → **All checks passed!**
 - CLI smoke tests for all scripts passed on synthetic data; site-held-out
   evaluation produced 3 folds × 6 models with integrated patient bootstrap CIs.

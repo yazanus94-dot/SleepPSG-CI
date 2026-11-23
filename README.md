@@ -18,7 +18,7 @@
 |---|---|
 | **Implemented software** | Full package: metadata audit & join, EDF chunk reader, quality checks, preprocessing, **7 modality feature extractors**, explicit unit harmonization, 6 baselines using all signal families, site-held-out evaluation, patient-cluster bootstrap, benchmark evaluator |
 | **Tested on synthetic fixtures** | Yes — all automated tests use synthetic metadata/EDFs (including a full end-to-end join and chunk-read tests) |
-| **Tested on real data** | **No** — no Kaggle credentials/BDSP terms acceptance; no labelled CSV or EDF downloaded |
+| **Tested on real data** | **No** — no Kaggle credentials/BDSP terms acceptance; no labelled CSV or EDF downloaded. Public metadata inventory verified: `demographics.csv` is 131,863 bytes, but authenticated retrieval is blocked |
 | **Model training actually completed** | Only on synthetic software-test fixtures; no real patient-data model was fitted |
 | **Real performance measured** | **None** — no clinical metrics or scores are claimed |
 
@@ -58,6 +58,27 @@ python scripts/inventory_dataset.py
 Selective retrieval of `demographics.csv` requires Kaggle credentials and BDSP
 terms acceptance. **No dataset content was downloaded.** If unavailable, the
 metadata command exits with a clear error and never writes a fake empty report.
+
+### 3.1 Verified access status (inspected 2026-11-23)
+
+- Public Kaggle metadata API and file inventory are reachable without credentials.
+- The small training set is 230,024,509,878 bytes (~214 GiB); the large set is
+  ~1.2 TiB. Neither is downloaded.
+- `demographics.csv` exists in the small training set and is **131,863 bytes**
+  (~129 KiB) — comfortably below the 500 MiB selective-retrieval cap.
+- Labelled training sources: `S0001`, `I0002`, `I0006`. Hidden sources `I0004`
+  and `I0007` are never used as labelled data.
+- Local blockers: `KAGGLE_USERNAME`, `KAGGLE_KEY`, `KAGGLE_CONFIG_DIR` are unset
+  and the `kaggle` CLI is not installed. Acceptance of the BDSP Credentialed
+  Health Data License v1.0.0 cannot be verified without an authenticated account,
+  and terms must never be accepted on another person's behalf.
+
+**Exact manual action required:** log into the Kaggle account, open
+https://www.kaggle.com/datasets/physionet/physionetchallenge2026data and accept the
+BDSP data terms yourself; create a Kaggle API token (Account → Create New API
+Token) and install the `kaggle` CLI; then configure `KAGGLE_USERNAME`/`KAGGLE_KEY`
+(or `~/.kaggle/kaggle.json`) and run the single-file command below. Only then can
+the real metadata audit be performed.
 
 ## 4. Data governance and privacy
 
@@ -202,10 +223,20 @@ python scripts/extract_features.py physio/S0001/sub-S0001111197789-ses1.edf \
 python scripts/build_feature_cohort.py data/demographics.csv data/features.csv \
   --output data/feature_cohort.csv --report outputs/join_report.json
 
-# 6. Train a baseline / run site-held-out evaluation
+# 6. Train a baseline / run the reproducible site-held-out experiment
 python scripts/train_baselines.py data/feature_cohort.csv --model combined_lr
-python scripts/evaluate_models.py data/feature_cohort.csv
+python scripts/evaluate_models.py data/feature_cohort.csv \
+  --metadata-csv data/demographics.csv \
+  --output outputs/evaluation_results.json \
+  --comparison outputs/comparison_table.csv \
+  --manifest-output outputs/experiment_manifest.json
 ```
+
+`evaluate_models.py` accepts only `S0001`, `I0002` and `I0006`, rejects hidden
+sources, records SHA-256 checksums of the feature cohort and demographics in a
+provenance manifest, keeps composite patients grouped, uses fold-local
+imputation, applies the δ = 2 age-conditioned AUROC, reports unscoreable folds,
+and writes patient-cluster bootstrap CIs. It writes aggregate results only.
 
 ## 11. Tests and results
 
@@ -214,10 +245,18 @@ python -m pytest -q
 ruff check .
 ```
 
-CI runs without Kaggle credentials or PhysioNet downloads. **No real-data
-results are published**; `benchmark/expected_results.json` states this
-explicitly. Synthetic fixtures are software checks only, never clinical
-performance.
+CI runs without Kaggle credentials or PhysioNet downloads. Evidence categories
+are kept strictly separate:
+
+- **Implemented software:** the full pipeline (see status table).
+- **Synthetic test results:** 144 automated tests exercise algorithm behavior on
+  synthetic metadata/EDFs; these are software checks, never clinical performance.
+- **Real metadata audit results:** none — `demographics.csv` was not retrieved.
+- **Real EDF processing results:** none — no recording was downloaded or read.
+- **Actual model-performance results:** none — no real patient-data model was fitted.
+
+`benchmark/expected_results.json` states this explicitly. No hidden labels,
+official score or competition participation is claimed.
 
 ## 12. Limitations
 

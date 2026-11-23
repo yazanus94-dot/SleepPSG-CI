@@ -101,6 +101,72 @@ def test_synthetic_edf_inventory_and_extraction(tmp_path):
     assert row["missing_eog"] == 1.0
 
 
+def test_duplicate_edf_channel_labels_are_disambiguated(tmp_path):
+    """Two real channels with the same EDF label must not collapse into one."""
+    import edfio
+    import numpy as np
+
+    from sleeppsg_ci.feature_table import extract_from_edf
+
+    wave = np.sin(np.arange(1280) / 10)
+    signals = [
+        edfio.EdfSignal(wave, 128.0, label="EEG", physical_dimension="uV",
+                        physical_range=(-1, 1)),
+        edfio.EdfSignal(wave * 2.0, 128.0, label="EEG", physical_dimension="uV",
+                        physical_range=(-2, 2)),
+    ]
+    path = tmp_path / "duplicate_labels.edf"
+    edfio.Edf(signals).write(path)
+
+    header = inspect_edf_header(path)
+    assert header.channels == ("EEG", "EEG__2")
+    assert header.raw_channels == ("EEG", "EEG")
+    assert len(header.sampling_rates) == 2
+
+    audit = audit_recording(path, rules=(ChannelRule("EEG", "EEG", verified=True),))
+    assert audit.duplicate_channel_labels == ["EEG"]
+
+    row = extract_from_edf(path, rules=(ChannelRule("EEG", "EEG", verified=True),),
+                           chunk_seconds=5.0, epoch_seconds=30.0)
+    assert row["n_channels_eeg"] == 2.0
+    assert any("ch_eeg_" in key for key in row)
+    assert any("ch_eeg__2_" in key for key in row)
+    assert row["unit_raw_channel_eeg_eeg__2"] == "EEG"
+
+
+def test_epoch_generator_capped_at_header_epoch_count(tmp_path, monkeypatch):
+    """Header/sample mismatch cannot yield more epochs than were declared."""
+    import edfio
+    import numpy as np
+
+    class FakeSignal:
+        label = "EEG"
+        sampling_frequency = 128.0
+        physical_dimension = "uV"
+        physical_min = -1.0
+        physical_max = 1.0
+
+        def get_data_slice(self, start_second, stop_second):
+            # Real EDF readers may return a few extra samples per slice.
+            n = int((stop_second - start_second) * self.sampling_frequency) + 200
+            return np.zeros(n)
+
+    class FakeEdf:
+        duration = 59.9  # one 30 s epoch by header, but slices overfill
+        signals = [FakeSignal()]
+
+    path = tmp_path / "duration_mismatch.edf"
+    path.write_bytes(b"fake")
+    monkeypatch.setattr(edfio, "read_edf", lambda *_a, **_k: FakeEdf())
+
+    from sleeppsg_ci.signal_reader import EdfChunkReader
+
+    with EdfChunkReader(path) as reader:
+        epochs, info = reader.iter_epochs("EEG", chunk_seconds=30.0, epoch_seconds=30.0)
+        assert info.n_epochs == 1
+        assert len(list(epochs)) == 1
+
+
 def test_chunk_reading_never_accesses_full_signal_data(tmp_path, monkeypatch):
     """Regression: partial reads are used, not EdfSignal.data materialization."""
     import edfio

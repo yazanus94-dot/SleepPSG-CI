@@ -103,11 +103,13 @@ class EdfHeader:
     units: dict[str, str]
     physical_limits: dict[str, tuple[float | None, float | None]]
     duration_seconds: float | None
+    raw_channels: tuple[str, ...] = ()
 
     def to_dict(self) -> dict:
         return {
             "path": self.path,
             "channels": list(self.channels),
+            "original_channels": list(self.raw_channels),
             "sampling_rates": dict(self.sampling_rates),
             "units": dict(self.units),
             "physical_limits": {key: list(value) for key, value in self.physical_limits.items()},
@@ -126,6 +128,7 @@ def inspect_edf_header(path: str | Path) -> EdfHeader:
         rates: dict[str, float] = {}
         units: dict[str, str] = {}
         limits: dict[str, tuple[float | None, float | None]] = {}
+        originals = reader.original_channel_labels()
         for label in reader.channels():
             name = label or f"CH{len(channels) + 1}"
             channels.append(name)
@@ -140,6 +143,7 @@ def inspect_edf_header(path: str | Path) -> EdfHeader:
         units=units,
         physical_limits=limits,
         duration_seconds=duration,
+        raw_channels=tuple(originals.values()),
     )
 
 
@@ -153,6 +157,7 @@ class RecordingAudit:
     missing_modalities: list[str]
     channel_quality: dict[str, dict]
     unit_handling: dict[str, dict] = field(default_factory=dict)
+    duplicate_channel_labels: list[str] = field(default_factory=list)
     excluded_reasons: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -163,6 +168,7 @@ class RecordingAudit:
             "missing_modalities": list(self.missing_modalities),
             "channel_quality": dict(self.channel_quality),
             "unit_handling": dict(self.unit_handling),
+            "duplicate_channel_labels": list(self.duplicate_channel_labels),
             "excluded_reasons": list(self.excluded_reasons),
         }
 
@@ -187,8 +193,10 @@ def audit_recording(
             site = part
             break
 
+    raws = header.raw_channels or header.channels
     modality = {
-        channel: resolve_modality(channel, rules, site=site) for channel in header.channels
+        channel: resolve_modality(raws[index] if index < len(raws) else channel, rules, site=site)
+        for index, channel in enumerate(header.channels)
     }
     available = sorted({value for value in modality.values() if value != "UNVERIFIED"})
     missing = sorted(set(expected_modalities) - set(available))
@@ -205,6 +213,11 @@ def audit_recording(
             resolved, header.units.get(channel, ""), physical_min=low, physical_max=high
         )
         unit_handling[channel] = handling.to_dict()
+
+    label_counts: dict[str, int] = {}
+    for raw in header.raw_channels:
+        label_counts[raw] = label_counts.get(raw, 0) + 1
+    duplicate_labels = sorted(label for label, count in label_counts.items() if count > 1)
 
     quality: dict[str, dict] = {}
     reasons: list[str] = []
@@ -230,6 +243,7 @@ def audit_recording(
         missing_modalities=missing,
         channel_quality=quality,
         unit_handling=unit_handling,
+        duplicate_channel_labels=duplicate_labels,
         excluded_reasons=sorted(set(reasons)),
     )
 

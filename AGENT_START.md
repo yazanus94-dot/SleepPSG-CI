@@ -12,6 +12,18 @@ repository was modified.
 3. `python scripts/inventory_dataset.py` — read-only access audit.
 4. Provide a labelled training `demographics.csv` under `data/` (git-ignored) and
    run `python scripts/audit_metadata.py data/demographics.csv`.
+5. Once a git-ignored feature cohort exists, run the real-data experiment entry
+   point: `python scripts/evaluate_models.py data/feature_cohort.csv
+   --metadata-csv data/demographics.csv --manifest-output
+   outputs/experiment_manifest.json`. It accepts only `S0001`/`I0002`/`I0006`,
+   rejects hidden sources, and records input checksums.
+
+## Current data-access blocker
+
+Public metadata is reachable and `demographics.csv` is 131,863 bytes, but no
+Kaggle credentials/CLI and no verified BDSP terms acceptance are present locally.
+The user must personally accept the terms and configure credentials; do not
+accept terms on their behalf. No dataset content has been downloaded.
 
 ## Governance reminders
 
