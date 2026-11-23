@@ -1,0 +1,9 @@
+{
+  "status": "no_real_data_results",
+  "real_data_results_exist": false,
+  "message": "No real-data evaluation has been performed. The public Kaggle training set requires credentials and terms acceptance that are not configured locally, and its small/large versions are approximately 214 GiB / 1.2 TiB. No raw EDF recordings were downloaded or processed, and no model scores are claimed.",
+  "synthetic_data_policy": "Synthetic fixtures are used only in automated software tests to verify algorithm behavior. They are never reported as clinical performance and never mixed into real-data metrics.",
+  "primary_metric": "age_conditioned_auroc_delta_2_years",
+  "official_example_commit": "c0bcd78ddb892290b9d218be9be19660f4d8bdf3",
+  "example_metrics": null
+}

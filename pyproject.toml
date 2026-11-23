@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sleeppsg-ci"
+version = "0.1.0"
+description = "Independent multimodal PSG cognitive-impairment research benchmark"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "SleepPSG-CI contributors" }]
+keywords = ["polysomnography", "eeg", "ecg", "biomedical-signal-processing", "machine-learning"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Intended Audience :: Science/Research",
+  "Topic :: Scientific/Engineering :: Medical Science Apps.",
+]
+dependencies = [
+  "numpy>=1.24",
+  "pandas>=2.0",
+  "scipy>=1.10",
+  "scikit-learn>=1.3",
+  "edfio>=0.4",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.4",
+  "ruff>=0.4",
+]
+
+[project.urls]
+Homepage = "https://github.com/yazanus94-dot/SleepPSG-CI"
+Repository = "https://github.com/yazanus94-dot/SleepPSG-CI"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "."]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+exclude = [".venv", "venv", "build", "dist", "*.egg-info"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]

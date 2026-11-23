@@ -1,0 +1,31 @@
+# Raw data, patient-level records and dataset archives
+data/*
+!data/.gitkeep
+outputs/raw/
+outputs/patient_level/
+*.edf
+*.bdf
+*.vhdr
+*.eeg
+*.vmrk
+*.fif
+*.csv
+*.tsv
+
+# Credentials and local environment
+.env
+.env.*
+*.token
+*.pem
+
+# Python caches and build artifacts
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
