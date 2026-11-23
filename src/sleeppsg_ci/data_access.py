@@ -40,9 +40,26 @@ TRAINING_SOURCES = ("S0001", "I0002", "I0006")
 HIDDEN_SOURCES = ("I0004", "I0007")  # validation / test; labels never accessed
 
 CREDENTIAL_SOURCE_NONE = "none"
+CREDENTIAL_SOURCE_API_TOKEN_ENV = "kaggle_api_token_env"
+CREDENTIAL_SOURCE_ACCESS_TOKEN_FILE = "access_token_file"
+CREDENTIAL_SOURCE_OAUTH = "oauth_credentials"
 CREDENTIAL_SOURCE_ENV = "environment"
-CREDENTIAL_SOURCE_HOME = "home_kaggle_json"
 CREDENTIAL_SOURCE_CONFIG_DIR = "kaggle_config_dir"
+CREDENTIAL_SOURCE_HOME = "home_kaggle_json"
+CREDENTIAL_SOURCE_XDG = "xdg_kaggle_json"
+
+# Verified against the official Kaggle CLI source and docs (2026-11-23):
+# https://github.com/Kaggle/kaggle-api/blob/main/docs/README.md#authentication
+# and src/kaggle/api/kaggle_api_extended.py + kagglesdk/kaggle_env.py.
+SUPPORTED_CREDENTIAL_SOURCES: tuple[str, ...] = (
+    CREDENTIAL_SOURCE_API_TOKEN_ENV,
+    CREDENTIAL_SOURCE_ACCESS_TOKEN_FILE,
+    CREDENTIAL_SOURCE_OAUTH,
+    CREDENTIAL_SOURCE_ENV,
+    CREDENTIAL_SOURCE_CONFIG_DIR,
+    CREDENTIAL_SOURCE_HOME,
+    CREDENTIAL_SOURCE_XDG,
+)
 
 
 class DataAccessError(RuntimeError):
@@ -87,23 +104,72 @@ def _valid_kaggle_json(path: Path) -> bool:
     )
 
 
+def _nonblank_file(path: Path) -> bool:
+    """True when a file exists and contains non-whitespace content (values discarded)."""
+    try:
+        return bool(path.read_text(encoding="utf-8").strip())
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
+def _valid_oauth_credentials(path: Path) -> bool:
+    """True for a Kaggle OAuth credentials file with a non-blank refresh token."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    refresh = payload.get("refresh_token")
+    return isinstance(refresh, str) and bool(refresh.strip())
+
+
 def credential_source(
     *,
     environ: Mapping[str, str] | None = None,
     home: str | Path | None = None,
 ) -> str:
-    """Identify where usable Kaggle credentials are configured (never their values)."""
+    """Identify where usable Kaggle credentials are configured (never their values).
+
+    Detection mirrors the current official CLI order: API token (env or file),
+    access-token file, OAuth credentials, legacy username/key pair, legacy
+    ``kaggle.json`` (custom config dir, home dir, then XDG fallback).
+    """
     env = os.environ if environ is None else environ
+    home_dir = Path.home() if home is None else Path(home)
+    kaggle_dir = home_dir / ".kaggle"
+
+    # 1. KAGGLE_API_TOKEN holds a token value, or a path to a token file.
+    api_token = env.get("KAGGLE_API_TOKEN")
+    if api_token and str(api_token).strip():
+        candidate = Path(str(api_token).strip())
+        if candidate.is_file():
+            if _nonblank_file(candidate):
+                return CREDENTIAL_SOURCE_API_TOKEN_ENV
+        else:
+            return CREDENTIAL_SOURCE_API_TOKEN_ENV
+
+    # 2. API token file written by "Generate New Token".
+    if _nonblank_file(kaggle_dir / "access_token") or _nonblank_file(kaggle_dir / "access_token.txt"):
+        return CREDENTIAL_SOURCE_ACCESS_TOKEN_FILE
+
+    # 3. OAuth credentials created by `kaggle auth login` (never run by us).
+    if _valid_oauth_credentials(kaggle_dir / "credentials.json"):
+        return CREDENTIAL_SOURCE_OAUTH
+
+    # 4. Legacy username/key pair.
     if env.get("KAGGLE_USERNAME") and env.get("KAGGLE_KEY"):
         return CREDENTIAL_SOURCE_ENV
 
+    # 5. Legacy kaggle.json file locations.
     custom_dir = env.get("KAGGLE_CONFIG_DIR")
     if custom_dir and _valid_kaggle_json(Path(custom_dir) / "kaggle.json"):
         return CREDENTIAL_SOURCE_CONFIG_DIR
-
-    home_dir = Path.home() if home is None else Path(home)
-    if _valid_kaggle_json(home_dir / ".kaggle" / "kaggle.json"):
+    if _valid_kaggle_json(kaggle_dir / "kaggle.json"):
         return CREDENTIAL_SOURCE_HOME
+    xdg_home = env.get("XDG_CONFIG_HOME")
+    if xdg_home and _valid_kaggle_json(Path(xdg_home) / "kaggle" / "kaggle.json"):
+        return CREDENTIAL_SOURCE_XDG
     return CREDENTIAL_SOURCE_NONE
 
 
@@ -303,6 +369,7 @@ def access_audit_to_dict(audit: AccessAudit) -> dict:
         "kaggle_cli_available": audit.kaggle_cli_available,
         "kaggle_credentials_present": audit.kaggle_credentials_present,
         "credential_source": audit.credential_source,
+        "supported_credential_sources": list(SUPPORTED_CREDENTIAL_SOURCES),
         "public_metadata_api_reachable": audit.public_metadata_api_reachable,
         "selective_file_retrieval_supported": audit.selective_file_retrieval_supported,
         "small_dataset_bytes": audit.small_dataset_bytes,

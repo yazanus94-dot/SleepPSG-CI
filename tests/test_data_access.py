@@ -14,10 +14,15 @@ import pytest
 from scripts import download_metadata as download_script
 from sleeppsg_ci import data_access as da
 from sleeppsg_ci.data_access import (
+    CREDENTIAL_SOURCE_ACCESS_TOKEN_FILE,
+    CREDENTIAL_SOURCE_API_TOKEN_ENV,
     CREDENTIAL_SOURCE_CONFIG_DIR,
     CREDENTIAL_SOURCE_ENV,
     CREDENTIAL_SOURCE_HOME,
     CREDENTIAL_SOURCE_NONE,
+    CREDENTIAL_SOURCE_OAUTH,
+    CREDENTIAL_SOURCE_XDG,
+    SUPPORTED_CREDENTIAL_SOURCES,
     DataAccessError,
     access_audit_to_dict,
     audit_access,
@@ -82,6 +87,53 @@ def test_custom_kaggle_config_dir(tmp_path):
     assert credential_source(environ=env, home=tmp_path / "empty") == CREDENTIAL_SOURCE_CONFIG_DIR
 
 
+def test_api_token_environment_variable(tmp_path):
+    env = {"KAGGLE_API_TOKEN": SECRET}
+    assert kaggle_credentials_present(environ=env, home=tmp_path / "empty")
+    assert credential_source(environ=env, home=tmp_path / "empty") == CREDENTIAL_SOURCE_API_TOKEN_ENV
+    # Blank tokens are not credentials.
+    assert not kaggle_credentials_present(environ={"KAGGLE_API_TOKEN": "   "}, home=tmp_path / "empty")
+
+
+def test_api_token_env_pointing_to_token_file(tmp_path):
+    token_file = tmp_path / "my_token.txt"
+    token_file.write_text(SECRET + "\n", encoding="utf-8")
+    env = {"KAGGLE_API_TOKEN": str(token_file)}
+    assert credential_source(environ=env, home=tmp_path / "empty") == CREDENTIAL_SOURCE_API_TOKEN_ENV
+    token_file.write_text("   \n", encoding="utf-8")
+    assert not kaggle_credentials_present(environ=env, home=tmp_path / "empty")
+
+
+@pytest.mark.parametrize("filename", ["access_token", "access_token.txt"])
+def test_access_token_file(tmp_path, filename):
+    home = tmp_path / "home"
+    path = home / ".kaggle" / filename
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(SECRET, encoding="utf-8")
+    assert credential_source(environ={}, home=home) == CREDENTIAL_SOURCE_ACCESS_TOKEN_FILE
+    path.write_text("  ", encoding="utf-8")
+    assert not kaggle_credentials_present(environ={}, home=home)
+
+
+def test_oauth_credentials_file(tmp_path):
+    home = tmp_path / "home"
+    write_json(home / ".kaggle" / "credentials.json", {
+        "refresh_token": SECRET, "access_token": "ignored", "username": "user",
+    })
+    assert credential_source(environ={}, home=home) == CREDENTIAL_SOURCE_OAUTH
+    write_json(home / ".kaggle" / "credentials.json", {"access_token": "only"})
+    assert not kaggle_credentials_present(environ={}, home=home)
+    (home / ".kaggle" / "credentials.json").write_text("{bad", encoding="utf-8")
+    assert not kaggle_credentials_present(environ={}, home=home)
+
+
+def test_xdg_config_dir_legacy_json(tmp_path):
+    xdg = tmp_path / "xdg"
+    write_json(xdg / "kaggle" / "kaggle.json", {"username": "user", "key": SECRET})
+    env = {"XDG_CONFIG_HOME": str(xdg)}
+    assert credential_source(environ=env, home=tmp_path / "empty") == CREDENTIAL_SOURCE_XDG
+
+
 def test_missing_credentials(tmp_path):
     assert not kaggle_credentials_present(environ={}, home=tmp_path / "empty")
     assert credential_source(environ={}, home=tmp_path / "empty") == CREDENTIAL_SOURCE_NONE
@@ -114,6 +166,23 @@ def test_audit_reports_source_without_values(tmp_path):
     assert report["credential_source"] == CREDENTIAL_SOURCE_ENV
     assert report["kaggle_credentials_present"] is True
     assert SECRET not in json.dumps(report)
+
+
+def test_all_supported_sources_are_listed_and_never_leak(tmp_path):
+    home = tmp_path / "home"
+    write_json(home / ".kaggle" / "credentials.json", {"refresh_token": SECRET})
+    report = access_audit_to_dict(audit_access(environ={}, home=home))
+    assert report["credential_source"] == CREDENTIAL_SOURCE_OAUTH
+    assert set(report["supported_credential_sources"]) == set(SUPPORTED_CREDENTIAL_SOURCES)
+    assert SECRET not in json.dumps(report)
+
+
+def test_token_env_never_leaks_in_download_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("KAGGLE_API_TOKEN", SECRET)
+    monkeypatch.setattr(da.shutil, "which", lambda _name: None)
+    with pytest.raises(DataAccessError) as exc:
+        download_metadata_files(tmp_path / "data", confirm_bsdp_terms=True)
+    assert SECRET not in str(exc.value)
 
 
 def test_no_credential_leakage_in_error_messages(tmp_path, monkeypatch):

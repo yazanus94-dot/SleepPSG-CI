@@ -68,41 +68,76 @@ metadata command exits with a clear error and never writes a fake empty report.
   (~129 KiB) — comfortably below the 500 MiB selective-retrieval cap.
 - Labelled training sources: `S0001`, `I0002`, `I0006`. Hidden sources `I0004`
   and `I0007` are never used as labelled data.
-- Local blockers: `KAGGLE_USERNAME`, `KAGGLE_KEY` and `KAGGLE_CONFIG_DIR` are unset,
-  no `~/.kaggle/kaggle.json` exists, and the `kaggle` CLI is not installed.
-  Acceptance of the BDSP Credentialed Health Data License v1.0.0 cannot be
-  verified without an authenticated account, and terms must never be accepted on
-  another person's behalf.
+- Local blockers: no Kaggle API token, access-token file, OAuth credentials,
+  username/key pair or legacy `kaggle.json` is configured, and the `kaggle` CLI is
+  not installed. Acceptance of the BDSP Credentialed Health Data License v1.0.0
+  cannot be verified without an authenticated account, and terms must never be
+  accepted on another person's behalf.
 
-Credential detection accepts any of three configurations (values are never
-printed): `KAGGLE_USERNAME` + `KAGGLE_KEY`, a valid `~/.kaggle/kaggle.json`, or a
-valid `kaggle.json` under a custom `KAGGLE_CONFIG_DIR`.
+#### Supported Kaggle CLI authentication methods
+
+Verified against the official Kaggle CLI documentation
+(`Kaggle/kaggle-api/docs/README.md`, authentication section) and CLI/SDK source
+on 2026-11-23. Detection reports only the **source label** and a presence
+boolean — never a token, key or file value.
+
+| Method | Where the user configures it | Our source label |
+|---|---|---|
+| **API token (current)** — "Generate New Token" at https://www.kaggle.com/settings/api | `KAGGLE_API_TOKEN` env (value, or a path to a token file) | `kaggle_api_token_env` |
+| **API token file (current)** | `~/.kaggle/access_token` (or `access_token.txt`) | `access_token_file` |
+| **OAuth (current)** — user runs `kaggle auth login` interactively | `~/.kaggle/credentials.json` written by the CLI | `oauth_credentials` |
+| **Legacy key pair** | `KAGGLE_USERNAME` + `KAGGLE_KEY` env | `environment` |
+| **Legacy API key file** — "Create Legacy API Key" at https://www.kaggle.com/settings/api | `~/.kaggle/kaggle.json` (`{"username", "key"}`) | `home_kaggle_json` |
+| **Legacy key in custom dir** (supported by the installed CLI) | `$KAGGLE_CONFIG_DIR/kaggle.json` | `kaggle_config_dir` |
+| **Legacy key via XDG fallback** (Linux CLI behaviour) | `$XDG_CONFIG_HOME/kaggle/kaggle.json` | `xdg_kaggle_json` |
+
+Do not confuse the current **Generate New Token** API-token workflow with the
+**legacy Create Legacy API Key** `kaggle.json` workflow. We never run
+`kaggle auth login` or accept terms automatically.
+
+#### CLI installation requirement
+
+The current Kaggle CLI declares **Python 3.11+**. SleepPSG-CI itself remains
+compatible with its declared Python 3.10+ range; keep the CLI in an isolated
+environment so it does not affect the project interpreter:
+
+```bash
+pipx install kaggle        # recommended
+# or: uv tool install kaggle
+# alternative: python -m pip install kaggle   (in a Python 3.11+ environment)
+```
 
 **Exact manual setup and retrieval commands** (run these yourself; no terms are
 accepted programmatically):
 
 ```bash
-# 1. Install the Kaggle CLI and the project (dev extras)
-python -m pip install kaggle
+# 1. Project environment (Python 3.10+ is fine)
 python -m pip install -e ".[dev]"
 
-# 2. Log in at https://www.kaggle.com and personally ACCEPT the BDSP terms at
-#    https://www.kaggle.com/datasets/physionet/physionetchallenge2026data
-#    Kaggle account -> "Create New API Token" -> save as ~/.kaggle/kaggle.json
-#    (JSON keys: "username" and "key"), or set KAGGLE_USERNAME / KAGGLE_KEY.
-#    For a custom location: export KAGGLE_CONFIG_DIR=/path/to/config
+# 2. Install the CLI in its own Python 3.11+ environment (pipx or uv)
+pipx install kaggle    # or: uv tool install kaggle
 
-# 3. Read-only access audit (shows only presence/source, never values)
+# 3. Configure ONE authentication method, e.g. the current API token:
+#    https://www.kaggle.com/settings/api -> "Generate New Token"
+export KAGGLE_API_TOKEN='...'          # or write the raw token to ~/.kaggle/access_token
+# Legacy alternative: "Create Legacy API Key" -> ~/.kaggle/kaggle.json
+# (or KAGGLE_USERNAME/KAGGLE_KEY, or $KAGGLE_CONFIG_DIR/kaggle.json)
+# OAuth alternative: run `kaggle auth login` yourself; we never auto-login.
+
+# 4. Personally ACCEPT the BDSP terms at
+#    https://www.kaggle.com/datasets/physionet/physionetchallenge2026data
+
+# 5. Read-only access audit (shows only presence/source, never values)
 python scripts/inventory_dataset.py
 
-# 4. Download ONLY demographics.csv. The explicit flag is your assertion that
+# 6. Download ONLY demographics.csv. The explicit flag is your assertion that
 #    you already accepted the terms; the script never accepts them for you.
 python scripts/download_metadata.py \
   --confirm-bsdp-terms-accepted \
   --destination data \
   --output-report outputs/metadata_download_report.json
 
-# 5. Real aggregate metadata audit (never commit the patient-level CSV)
+# 7. Real aggregate metadata audit (never commit the patient-level CSV)
 python scripts/audit_metadata.py data/demographics.csv \
   --output outputs/metadata_audit.json
 ```
@@ -281,8 +316,8 @@ CI runs without Kaggle credentials or PhysioNet downloads. Evidence categories
 are kept strictly separate:
 
 - **Implemented software:** the full pipeline (see status table).
-- **Synthetic test results:** 168 automated tests (24 mocked data-access tests
-  added for credential detection, size verification and confirmation gating)
+- **Synthetic test results:** 176 automated tests (32 mocked data-access tests
+  covering all supported credentials, size verification and confirmation gating)
   exercise algorithm behavior without real downloads; these are software checks,
   never clinical performance.
 - **Real metadata audit results:** none — `demographics.csv` was not retrieved.

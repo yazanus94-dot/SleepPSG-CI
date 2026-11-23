@@ -1,6 +1,6 @@
-# Audit report — SleepPSG-CI (data-access readiness sprint)
+# Audit report — SleepPSG-CI (Kaggle CLI compatibility sprint)
 
-Inspection date: **2026-11-23**. Baseline commit: `3eba1f4...`.
+Inspection date: **2026-11-23**. Baseline commit: `90a3906...`.
 Status: software implemented and tested on synthetic/mocked fixtures; **no real
 authentication, terms acceptance, dataset download, real EDF processing, model
 training or clinical performance measurement occurred in this sprint**.
@@ -83,6 +83,28 @@ training or clinical performance measurement occurred in this sprint**.
 - No credentials were configured, no terms accepted, no network data downloaded
   and no EDF touched during implementation or testing.
 
+### This sprint (Kaggle CLI compatibility)
+
+- Inspected the official Kaggle CLI documentation
+  (`Kaggle/kaggle-api/docs/README.md`, authentication section), configuration
+  docs and CLI/SDK source (`kaggle_api_extended.py`, `kagglesdk/kaggle_env.py`,
+  `kagglesdk/kaggle_creds.py`) on 2026-11-23.
+- `credential_source()` now recognizes, in CLI order: `KAGGLE_API_TOKEN` (value
+  or path to a token file), `~/.kaggle/access_token` (and `.txt`), OAuth
+  `~/.kaggle/credentials.json` (created by a user-run `kaggle auth login`),
+  `KAGGLE_USERNAME` + `KAGGLE_KEY`, `~/.kaggle/kaggle.json`, a custom
+  `KAGGLE_CONFIG_DIR/kaggle.json` and the Linux XDG fallback. Only source labels
+  and booleans are reported; no value is printed, logged or stored.
+- README now distinguishes the current **Generate New Token** API-token workflow
+  from the legacy **Create Legacy API Key** `kaggle.json` workflow, documents
+  OAuth as manual-only, and states that the current CLI requires Python 3.11+
+  (install via pipx/uv) while the project stays compatible with Python 3.10+.
+- Added 8 mocked tests for the new sources and invalid configurations; all
+  previous safeguards (explicit terms confirmation, demographics.csv-only
+  allowlist, remote size check, 500 MiB cap, post-download size verification)
+  remain in force and covered by tests.
+- No authentication, login, terms acceptance or download was performed.
+
 ## Files inspected
 
 Official reference material (read-only): `project-4-physionet-2026-psg-cognitive-impairment/evaluate_model.py`
@@ -117,10 +139,13 @@ not legitimately retrievable; no results were fabricated. The privacy-safe audit
 command is ready and documented.
 
 **Exact next user action:** log into the Kaggle account, open
-https://www.kaggle.com/datasets/physionet/physionetchallenge2026data, accept the
-BDSP Credentialed Health Data License v1.0.0 personally, create a Kaggle API
-token, install the `kaggle` CLI, and configure credentials via env vars,
-`~/.kaggle/kaggle.json` or `KAGGLE_CONFIG_DIR`. Then run, in order:
+https://www.kaggle.com/datasets/physionet/physionetchallenge2026data and accept
+the BDSP Credentialed Health Data License v1.0.0 personally. Install the CLI in
+an isolated Python 3.11+ environment (`pipx install kaggle` or `uv tool install
+kaggle`). Generate a current API token at https://www.kaggle.com/settings/api
+("Generate New Token") and set `KAGGLE_API_TOKEN` or write it to
+`~/.kaggle/access_token`; alternatively use a manual `kaggle auth login` or the
+legacy `kaggle.json` workflow. Then run, in order:
 `python scripts/inventory_dataset.py`,
 `python scripts/download_metadata.py --confirm-bsdp-terms-accepted --destination data`,
 `python scripts/audit_metadata.py data/demographics.csv --output outputs/metadata_audit.json`.
@@ -138,13 +163,14 @@ The full command list is in README section 3.1.
 
 ## Test results
 
-- `python -m pytest` → **168 passed, 0 failed, 0 skipped** (synthetic/mocked
+- `python -m pytest` → **176 passed, 0 failed, 0 skipped** (synthetic/mocked
   fixtures only; includes synthetic EDFs, end-to-end join + CLI, chunk-read/no-
   `.data` test, gap tests, official-scorer differential tests, bootstrap cluster
   test, airflow/SpO2 feature-selection tests, incomplete-identity counting tests,
   V/mV/uV unit equivalence tests, unit-aware feature-eligibility tests,
   duplicate-label and epoch-cap regressions, experiment source/provenance tests,
-  and 24 mocked data-access/credential/download-confirmation tests).
+  and 32 mocked data-access tests covering all supported credentials, invalid
+  configs, no-leakage assertions, size checks and download confirmation).
 - `ruff check .` → **All checks passed!**
 - CLI smoke tests for all scripts passed on synthetic data; site-held-out
   evaluation produced 3 folds × 6 models with integrated patient bootstrap CIs.
