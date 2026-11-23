@@ -91,7 +91,7 @@ would have selected one.
 
 | Priority | Method | Where the user configures it | Our source label |
 |---|---|---|---|
-| 1 | **API token (current)** — "Generate New Token" at https://www.kaggle.com/settings/api | `KAGGLE_API_TOKEN` env (value, or a path to a token file) | `kaggle_api_token_env` |
+| 1 | **API token (current)** — "Generate New Token" at https://www.kaggle.com/settings/api | `KAGGLE_API_TOKEN` env (literal token, or a path to a token file; an existing empty file/directory consumes the token stage and continues to legacy) | `kaggle_api_token_env` |
 | 1 | **API token file (current)** | `~/.kaggle/access_token` (CLI-documented) | `access_token_file` |
 | 1 | **API token compatibility file** | `~/.kaggle/access_token.txt` — supported because the CLI's own `_authenticate_with_access_token()` calls the SDK helper that reads this name; not listed in CLI docs | `access_token_file` |
 | 2 | **Legacy key pair** | `KAGGLE_USERNAME` + `KAGGLE_KEY` env | `environment` |
@@ -332,11 +332,11 @@ CI runs without Kaggle credentials or PhysioNet downloads. Evidence categories
 are kept strictly separate:
 
 - **Implemented software:** the full pipeline (see status table).
-- **Synthetic test results:** 189 automated tests (45 mocked data-access tests
-  covering all supported credentials, unsupported file extensions, XDG fallback
-  paths, precedence, size verification and confirmation gating) exercise
-  algorithm behavior without real downloads; these are software checks, never
-  clinical performance.
+- **Synthetic test results:** 193 automated tests (49 mocked data-access tests
+  covering all supported credentials, token-path edge cases, unsupported file
+  extensions, XDG fallback paths, precedence, size verification and confirmation
+  gating) exercise algorithm behavior without real downloads; these are software
+  checks, never clinical performance.
 - **Real metadata audit results:** none — `demographics.csv` was not retrieved.
 - **Real EDF processing results:** none — no recording was downloaded or read.
 - **Actual model-performance results:** none — no real patient-data model was fitted.

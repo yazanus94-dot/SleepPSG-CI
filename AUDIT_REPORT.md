@@ -1,6 +1,6 @@
 # Audit report — SleepPSG-CI (Kaggle CLI compatibility sprint)
 
-Inspection date: **2026-11-23**. Baseline commit: `6c6d467...`.
+Inspection date: **2026-11-23**. Baseline commit: `b90889b...`.
 Status: software implemented and tested on synthetic/mocked fixtures; **no real
 authentication, terms acceptance, dataset download, real EDF processing, model
 training or clinical performance measurement occurred in this sprint**.
@@ -146,6 +146,21 @@ training or clinical performance measurement occurred in this sprint**.
 - Added 6 mocked tests for unsupported token-file extensions. No real login,
   credential, download, terms acceptance or EDF processing was performed.
 
+### This sprint (KAGGLE_API_TOKEN path semantics)
+
+- **Defect fixed:** a `KAGGLE_API_TOKEN` value pointing to an existing but empty
+  file previously fell through to `~/.kaggle/access_token` and
+  `access_token.txt`. The official SDK helper returns the result of reading the
+  existing path immediately, so an empty file yields no token and the CLI
+  continues with legacy API-key authentication. Detection now matches this:
+  an existing empty file (or a directory) consumes the token stage and skips
+  the home token files; a non-existent path remains a literal token; a directory
+  is never treated as a valid token.
+- Added 4 mocked regression tests (valid token file, empty-path with a valid
+  home token file, empty-path with legacy credentials, non-existent literal
+  path and directory path). No credential values are printed or logged.
+- No authentication, terms acceptance, download or EDF processing occurred.
+
 ## Files inspected
 
 Official reference material (read-only): `project-4-physionet-2026-psg-cognitive-impairment/evaluate_model.py`
@@ -204,15 +219,15 @@ The full command list is in README section 3.1.
 
 ## Test results
 
-- `python -m pytest` → **189 passed, 0 failed, 0 skipped** (synthetic/mocked
+- `python -m pytest` → **193 passed, 0 failed, 0 skipped** (synthetic/mocked
   fixtures only; includes synthetic EDFs, end-to-end join + CLI, chunk-read/no-
   `.data` test, gap tests, official-scorer differential tests, bootstrap cluster
   test, airflow/SpO2 feature-selection tests, incomplete-identity counting tests,
   V/mV/uV unit equivalence tests, unit-aware feature-eligibility tests,
   duplicate-label and epoch-cap regressions, experiment source/provenance tests,
-  and 45 mocked data-access tests covering all supported credentials, unsupported
-  file extensions, XDG paths, precedence, invalid configs, no-leakage assertions,
-  size checks and download confirmation).
+  and 49 mocked data-access tests covering all supported credentials, token-path
+  edge cases, unsupported file extensions, XDG paths, precedence, invalid
+  configs, no-leakage assertions, size checks and download confirmation).
 - `ruff check .` → **All checks passed!**
 - CLI smoke tests for all scripts passed on synthetic data; site-held-out
   evaluation produced 3 folds × 6 models with integrated patient bootstrap CIs.

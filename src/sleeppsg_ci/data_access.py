@@ -123,6 +123,38 @@ def _nonblank_file(path: Path) -> bool:
         return False
 
 
+_TOKEN_ENV_ABSENT = "absent"
+_TOKEN_ENV_PRESENT = "present"
+_TOKEN_ENV_EXHAUSTED = "exhausted"
+
+
+def _api_token_env_state(value: object) -> str:
+    """Classify ``KAGGLE_API_TOKEN`` without returning or logging its value.
+
+    Mirrors ``kagglesdk.get_access_token_from_env``: when the value is a path to
+    an existing path, the SDK returns the result of reading that path
+    immediately. An empty file therefore yields no token and the CLI proceeds
+    to legacy authentication without checking the home access-token files.
+    A non-existent path is treated as a literal token value. An existing
+    directory is never accepted as a token.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return _TOKEN_ENV_ABSENT
+    try:
+        candidate = Path(raw)
+        exists = candidate.exists()
+        is_file = candidate.is_file()
+    except OSError:
+        # Invalid path characters: treat as a literal token string.
+        return _TOKEN_ENV_PRESENT
+    if not exists:
+        return _TOKEN_ENV_PRESENT
+    if is_file and _nonblank_file(candidate):
+        return _TOKEN_ENV_PRESENT
+    return _TOKEN_ENV_EXHAUSTED
+
+
 def _valid_oauth_credentials(path: Path) -> bool:
     """True for a Kaggle OAuth credentials file with a non-blank refresh token."""
     try:
@@ -149,28 +181,29 @@ def credential_source(
     already exists, otherwise (on Linux) ``$XDG_CONFIG_HOME/kaggle`` or the
     default ``~/.config/kaggle``. We never fall back to another config directory
     once the CLI has selected one.
+
+    ``KAGGLE_API_TOKEN`` pointing at an *existing* path consumes the token stage:
+    an empty file (or a directory) yields no token and we continue with legacy
+    detection without checking the home token files, matching the SDK helper.
     """
     env = os.environ if environ is None else environ
     home_dir = Path.home() if home is None else Path(home)
     kaggle_dir = home_dir / ".kaggle"
     current_platform = sys.platform if platform_name is None else platform_name
 
-    # 1a. KAGGLE_API_TOKEN holds a token value, or a path to a token file.
-    api_token = env.get("KAGGLE_API_TOKEN")
-    if api_token and str(api_token).strip():
-        candidate = Path(str(api_token).strip())
-        if candidate.is_file():
-            if _nonblank_file(candidate):
-                return CREDENTIAL_SOURCE_API_TOKEN_ENV
-        else:
-            return CREDENTIAL_SOURCE_API_TOKEN_ENV
+    # 1a. KAGGLE_API_TOKEN: literal value, token file, or an exhausted path.
+    token_state = _api_token_env_state(env.get("KAGGLE_API_TOKEN"))
+    if token_state == _TOKEN_ENV_PRESENT:
+        return CREDENTIAL_SOURCE_API_TOKEN_ENV
 
     # 1b. API token files. The extensionless name is CLI-documented; the .txt
     # compatibility name is supported by the kagglesdk helper the CLI calls.
-    if _nonblank_file(kaggle_dir / ACCESS_TOKEN_FILE):
-        return CREDENTIAL_SOURCE_ACCESS_TOKEN_FILE
-    if _nonblank_file(kaggle_dir / ACCESS_TOKEN_COMPAT_FILE):
-        return CREDENTIAL_SOURCE_ACCESS_TOKEN_FILE
+    # An existing (empty/directory) KAGGLE_API_TOKEN path skips these entirely.
+    if token_state == _TOKEN_ENV_ABSENT:
+        if _nonblank_file(kaggle_dir / ACCESS_TOKEN_FILE):
+            return CREDENTIAL_SOURCE_ACCESS_TOKEN_FILE
+        if _nonblank_file(kaggle_dir / ACCESS_TOKEN_COMPAT_FILE):
+            return CREDENTIAL_SOURCE_ACCESS_TOKEN_FILE
 
     # 2a. Legacy username/key environment pair.
     if env.get("KAGGLE_USERNAME") and env.get("KAGGLE_KEY"):

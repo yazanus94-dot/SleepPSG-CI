@@ -104,6 +104,53 @@ def test_api_token_env_pointing_to_token_file(tmp_path):
     assert not kaggle_credentials_present(environ=env, home=tmp_path / "empty")
 
 
+def test_empty_api_token_file_skips_home_access_token(tmp_path):
+    """An existing empty KAGGLE_API_TOKEN file consumes the token stage."""
+    home = tmp_path / "home"
+    token_file = home / ".kaggle" / "access_token"
+    token_file.parent.mkdir(parents=True, exist_ok=True)
+    token_file.write_text(SECRET, encoding="utf-8")
+    empty_token = tmp_path / "empty_token"
+    empty_token.write_text("", encoding="utf-8")
+    env = {"KAGGLE_API_TOKEN": str(empty_token)}
+    assert credential_source(environ=env, home=home) == CREDENTIAL_SOURCE_NONE
+    assert not kaggle_credentials_present(environ=env, home=home)
+
+
+def test_empty_api_token_file_continues_to_legacy_credentials(tmp_path):
+    home = tmp_path / "home"
+    (home / ".kaggle").mkdir(parents=True)
+    (home / ".kaggle" / "access_token").write_text(SECRET, encoding="utf-8")
+    empty_token = tmp_path / "empty_token"
+    empty_token.write_text("  \n", encoding="utf-8")
+    env = {
+        "KAGGLE_API_TOKEN": str(empty_token),
+        "KAGGLE_USERNAME": "user",
+        "KAGGLE_KEY": "legacy-key",
+    }
+    assert credential_source(environ=env, home=home) == CREDENTIAL_SOURCE_ENV
+
+
+def test_nonexistent_api_token_path_is_literal_token(tmp_path):
+    env = {"KAGGLE_API_TOKEN": str(tmp_path / "does_not_exist")}
+    assert credential_source(environ=env, home=tmp_path / "empty") == CREDENTIAL_SOURCE_API_TOKEN_ENV
+
+
+def test_directory_as_api_token_path_is_not_a_credential(tmp_path):
+    token_dir = tmp_path / "token_dir"
+    token_dir.mkdir()
+    home = tmp_path / "home"
+    (home / ".kaggle").mkdir(parents=True)
+    (home / ".kaggle" / "access_token").write_text(SECRET, encoding="utf-8")
+    env = {"KAGGLE_API_TOKEN": str(token_dir)}
+    assert credential_source(environ=env, home=home) == CREDENTIAL_SOURCE_NONE
+    assert not kaggle_credentials_present(environ=env, home=home)
+
+    env["KAGGLE_USERNAME"] = "user"
+    env["KAGGLE_KEY"] = "legacy-key"
+    assert credential_source(environ=env, home=home) == CREDENTIAL_SOURCE_ENV
+
+
 @pytest.mark.parametrize("filename", ["access_token", "access_token.txt"])
 def test_access_token_file(tmp_path, filename):
     home = tmp_path / "home"
