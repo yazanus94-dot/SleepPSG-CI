@@ -77,9 +77,10 @@ metadata command exits with a clear error and never writes a fake empty report.
 #### Supported Kaggle CLI authentication methods
 
 Verified against the official Kaggle CLI documentation
-(`Kaggle/kaggle-api/docs/README.md`, authentication section) and CLI/SDK source
-on 2026-11-23. Detection reports only the **source label** and a presence
-boolean — never a token, key or file value.
+(`Kaggle/kaggle-api/docs/README.md`, authentication section), the CLI's own
+authentication implementation, its published package metadata and the SDK helper
+it calls, on 2026-11-23. Detection reports only the **source label** and a
+presence boolean — never a token, key or file value.
 
 Official authentication order (`KaggleApi.authenticate`): **active API token →
 legacy API key → OAuth credentials**. Config-directory selection for
@@ -91,16 +92,24 @@ would have selected one.
 | Priority | Method | Where the user configures it | Our source label |
 |---|---|---|---|
 | 1 | **API token (current)** — "Generate New Token" at https://www.kaggle.com/settings/api | `KAGGLE_API_TOKEN` env (value, or a path to a token file) | `kaggle_api_token_env` |
-| 1 | **API token file (current)** | `~/.kaggle/access_token` (official SDK also accepts `access_token.txt`) | `access_token_file` |
+| 1 | **API token file (current)** | `~/.kaggle/access_token` (CLI-documented) | `access_token_file` |
+| 1 | **API token compatibility file** | `~/.kaggle/access_token.txt` — supported because the CLI's own `_authenticate_with_access_token()` calls the SDK helper that reads this name; not listed in CLI docs | `access_token_file` |
 | 2 | **Legacy key pair** | `KAGGLE_USERNAME` + `KAGGLE_KEY` env | `environment` |
 | 2 | **Legacy API key file** — "Create Legacy API Key" at https://www.kaggle.com/settings/api | selected config dir `/kaggle.json` (see rules above) | `kaggle_config_dir` / `home_kaggle_json` / `xdg_kaggle_json` |
 | 3 | **OAuth (current)** — user runs `kaggle auth login` interactively | `~/.kaggle/credentials.json` written by the CLI | `oauth_credentials` |
 
 Do not confuse the current **Generate New Token** API-token workflow with the
 **legacy Create Legacy API Key** `kaggle.json` workflow. We never run
-`kaggle auth login` or accept terms automatically. `access_token.txt` support
-was verified in the official `kagglesdk/kaggle_env.py` source (Windows
-convenience extension), not in a locally installed CLI.
+`kaggle auth login` or accept terms automatically.
+
+`access_token.txt` verification: Kaggle CLI 2.2.5 (PyPI) declares
+`kagglesdk>=0.1.38,<1.0`; the CLI's
+`src/kaggle/api/kaggle_api_extended.py::_authenticate_with_access_token()` calls
+`get_access_token_from_env()` from `kagglesdk`; that helper reads both
+`~/.kaggle/access_token` and `~/.kaggle/access_token.txt` (Windows convenience
+extension). This is CLI behaviour through its own call path, not an assumption
+from SDK code alone. Only these two exact file names are detected; other
+extensions are rejected by tests.
 
 #### CLI installation requirement
 
@@ -323,10 +332,11 @@ CI runs without Kaggle credentials or PhysioNet downloads. Evidence categories
 are kept strictly separate:
 
 - **Implemented software:** the full pipeline (see status table).
-- **Synthetic test results:** 183 automated tests (39 mocked data-access tests
-  covering all supported credentials, XDG fallback paths, precedence, size
-  verification and confirmation gating) exercise algorithm behavior without real
-  downloads; these are software checks, never clinical performance.
+- **Synthetic test results:** 189 automated tests (45 mocked data-access tests
+  covering all supported credentials, unsupported file extensions, XDG fallback
+  paths, precedence, size verification and confirmation gating) exercise
+  algorithm behavior without real downloads; these are software checks, never
+  clinical performance.
 - **Real metadata audit results:** none — `demographics.csv` was not retrieved.
 - **Real EDF processing results:** none — no recording was downloaded or read.
 - **Actual model-performance results:** none — no real patient-data model was fitted.

@@ -42,6 +42,14 @@ HIDDEN_SOURCES = ("I0004", "I0007")  # validation / test; labels never accessed
 CREDENTIAL_SOURCE_NONE = "none"
 CREDENTIAL_SOURCE_API_TOKEN_ENV = "kaggle_api_token_env"
 CREDENTIAL_SOURCE_ACCESS_TOKEN_FILE = "access_token_file"
+
+# CLI-documented token file. The current CLI's own authentication implementation
+# (kaggle-api 2.2.5, src/kaggle/api/kaggle_api_extended.py::_authenticate_with_access_token)
+# delegates discovery to kagglesdk.get_access_token_from_env(), which reads both
+# names below; the .txt variant is an explicitly documented compatibility option
+# for Windows users, not a CLI-doc'd primary location.
+ACCESS_TOKEN_FILE = "access_token"
+ACCESS_TOKEN_COMPAT_FILE = "access_token.txt"
 CREDENTIAL_SOURCE_OAUTH = "oauth_credentials"
 CREDENTIAL_SOURCE_ENV = "environment"
 CREDENTIAL_SOURCE_CONFIG_DIR = "kaggle_config_dir"
@@ -157,8 +165,11 @@ def credential_source(
         else:
             return CREDENTIAL_SOURCE_API_TOKEN_ENV
 
-    # 1b. API token file written by "Generate New Token" (SDK also accepts .txt).
-    if _nonblank_file(kaggle_dir / "access_token") or _nonblank_file(kaggle_dir / "access_token.txt"):
+    # 1b. API token files. The extensionless name is CLI-documented; the .txt
+    # compatibility name is supported by the kagglesdk helper the CLI calls.
+    if _nonblank_file(kaggle_dir / ACCESS_TOKEN_FILE):
+        return CREDENTIAL_SOURCE_ACCESS_TOKEN_FILE
+    if _nonblank_file(kaggle_dir / ACCESS_TOKEN_COMPAT_FILE):
         return CREDENTIAL_SOURCE_ACCESS_TOKEN_FILE
 
     # 2a. Legacy username/key environment pair.

@@ -115,6 +115,19 @@ def test_access_token_file(tmp_path, filename):
     assert not kaggle_credentials_present(environ={}, home=home)
 
 
+@pytest.mark.parametrize("filename", [
+    "access_token.bak", "access_token.key", "token.txt", "access_token.json",
+    "credentials.json.txt", "kaggle.json.txt",
+])
+def test_unsupported_token_file_extensions_are_not_credentials(tmp_path, filename):
+    home = tmp_path / "home"
+    path = home / ".kaggle" / filename
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(SECRET, encoding="utf-8")
+    assert credential_source(environ={}, home=home) == CREDENTIAL_SOURCE_NONE
+    assert not kaggle_credentials_present(environ={}, home=home)
+
+
 def test_oauth_credentials_file(tmp_path):
     home = tmp_path / "home"
     write_json(home / ".kaggle" / "credentials.json", {
