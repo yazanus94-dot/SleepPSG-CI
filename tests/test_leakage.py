@@ -28,7 +28,11 @@ def test_feature_extraction_emits_no_identifiers():
     rules = (ChannelRule("EEG", "EEG", verified=True),)
     row = extract_from_signals({"EEG": (np.sin(np.arange(1000) / 10), 256.0)}, rules)
     assert not any(key in row for key in FORBIDDEN)
-    assert all(key.startswith(("eeg_", "missing_", "n_verified")) for key in row)
+    # Only feature/metadata prefixes are emitted: never identifiers or labels.
+    assert all(
+        key.startswith(("eeg_", "missing_", "n_verified", "n_channels_", "signal_"))
+        for key in row
+    )
 
 
 def test_select_feature_matrix_excludes_identifiers():

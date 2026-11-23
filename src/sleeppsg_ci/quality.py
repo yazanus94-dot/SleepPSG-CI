@@ -108,3 +108,53 @@ def require_usable_signal(signal: np.ndarray, min_samples: int = 2) -> np.ndarra
     if not np.all(np.isfinite(array)):
         raise ValueError("Signal contains NaN or infinite samples; handle quality flags first.")
     return array
+
+
+def contiguous_finite_segments(signal: np.ndarray, min_length: int = 2) -> list[np.ndarray]:
+    """Split a signal into contiguous finite runs.
+
+    Non-finite samples are *boundaries*, never removed and concatenated. This
+    prevents artificial adjacency (and therefore false RR/respiratory intervals)
+    across gaps. Short runs are dropped and reported by the caller.
+    """
+    array = as_1d_float(signal)
+    mask = np.isfinite(array)
+    padded = np.concatenate(([False], mask, [False])).astype(np.int8)
+    transitions = np.diff(padded)
+    starts = np.flatnonzero(transitions == 1)
+    ends = np.flatnonzero(transitions == -1)
+    return [
+        array[start:end]
+        for start, end in zip(starts, ends, strict=True)
+        if end - start >= min_length
+    ]
+
+
+def aggregate_quality_reports(reports: list[dict]) -> dict:
+    """Combine per-chunk quality reports into one aggregate channel summary."""
+    if not reports:
+        return {
+            "n_samples": 0, "n_nonfinite": 0, "fraction_nonfinite": 0.0,
+            "is_flatline": False, "is_clipped": False, "duration_seconds": 0.0,
+            "std_amplitude": 0.0, "quality_ok": False, "reasons": ["no_chunks"],
+            "n_chunks": 0,
+        }
+    n_samples = sum(int(report.get("n_samples", 0)) for report in reports)
+    n_bad = sum(int(report.get("n_nonfinite", 0)) for report in reports)
+    variances = [
+        float(report.get("std_amplitude", 0.0)) ** 2
+        for report in reports
+    ]
+    reasons = sorted({reason for report in reports for reason in report.get("reasons", [])})
+    return {
+        "n_samples": n_samples,
+        "n_nonfinite": n_bad,
+        "fraction_nonfinite": round(n_bad / n_samples, 6) if n_samples else 0.0,
+        "is_flatline": any(bool(report.get("is_flatline", False)) for report in reports),
+        "is_clipped": any(bool(report.get("is_clipped", False)) for report in reports),
+        "duration_seconds": float(sum(float(report.get("duration_seconds") or 0.0) for report in reports)),
+        "std_amplitude": round(float(np.sqrt(np.mean(variances))), 6),
+        "quality_ok": not reasons,
+        "reasons": reasons,
+        "n_chunks": len(reports),
+    }

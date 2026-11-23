@@ -97,3 +97,60 @@ def test_missing_dataset_gives_clear_error(tmp_path):
 def test_required_columns_constant():
     assert "Cognitive_Impairment" in REQUIRED_COLUMNS
     assert "SiteID" in REQUIRED_COLUMNS
+
+
+def test_missing_demographics_not_double_counted():
+    frame = make_frame()
+    frame["Age"] = ["", None, "  ", 80, 67]
+    frame["BMI"] = [25.0, "", None, 22.0, 28.0]
+    audit = audit_cohort(frame)
+    assert audit.missing_demographics["Age"] == 3
+    assert audit.missing_demographics["BMI"] == 2
+
+
+def test_unique_patients_use_composite_key():
+    frame = make_frame()
+    frame.loc[1, "BDSPPatientID"] = "p1"  # same bare ID, same site -> duplicate
+    frame.loc[2, "BDSPPatientID"] = "p1"  # same bare ID, different site -> distinct
+    audit = audit_cohort(frame)
+    assert audit.unique_patients == 4
+    assert audit.duplicate_patient_id_rows == 1
+    assert audit.missing_patient_ids == 0
+
+
+def test_empty_age_subgroups_serialize_as_null():
+    frame = make_frame()
+    frame["Cognitive_Impairment"] = ["other"] * len(frame)
+    audit = audit_cohort(frame)
+    assert audit.age_summary["positive"]["count"] == 0
+    assert audit.age_summary["positive"]["mean"] is None
+    payload = json.loads(audit.to_json())
+    assert payload["age_summary"]["negative"]["min"] is None
+    assert "NaN" not in audit.to_json()
+
+
+def test_recording_map_skips_incomplete_rows(tmp_path):
+    frame = make_frame()
+    frame.loc[5] = ["", "p6", "sub-6", "1", 60, "Male", 25.0, 1]
+    frame.loc[6] = ["S0001", "p7", float("nan"), "1", 60, "Male", 25.0, 1]
+    frame.loc[7] = ["S0001", "p8", "sub-8", float("nan"), 60, "Male", 25.0, 1]
+    mapping = build_recording_map(frame)
+    assert "sub-6|1" not in mapping
+    assert "nan" not in str(mapping).casefold()
+    assert audit_cohort(frame).incomplete_recording_rows == 3
+
+
+def test_parse_recording_identity():
+    from sleeppsg_ci.cohort import parse_recording_identity
+
+    parsed = parse_recording_identity(
+        r"C:\data\physiological_data\S0001\sub-S0001111197789-ses2.edf"
+    )
+    assert parsed == {
+        "BidsFolder": "sub-S0001111197789",
+        "SessionID": "2",
+        "SiteID": "S0001",
+    }
+    incomplete = parse_recording_identity("unexpected.edf")
+    assert incomplete["BidsFolder"] == ""
+    assert incomplete["SessionID"] == ""

@@ -9,24 +9,15 @@ from .features_eeg import welch_psd
 from .preprocessing import detrend_signal
 
 
-def extract_eog_features(signal_array: np.ndarray, fs: float) -> dict[str, float]:
-    """Return EOG features from a verified EOG channel."""
-    array = np.asarray(signal_array, dtype=float).reshape(-1)
-    finite = array[np.isfinite(array)]
-    base: dict[str, float] = {
-        "eog_n_samples": float(array.size),
-        "eog_nonfinite_fraction": float((array.size - finite.size) / array.size) if array.size else 1.0,
-        "eog_features_valid": 0.0,
-    }
-    nan_keys = ("eog_std", "eog_peak_to_peak", "eog_slow_fast_ratio",
-                "eog_blink_like_events", "eog_total_power")
-    base.update({key: float("nan") for key in nan_keys})
-    if finite.size < 16 or not np.isfinite(fs) or fs <= 0:
-        return base
-
+def _segment_features(finite: np.ndarray, fs: float) -> dict[str, float]:
     centered = detrend_signal(finite) if finite.size > 2 else finite - np.mean(finite)
-    base["eog_std"] = float(np.std(centered))
-    base["eog_peak_to_peak"] = float(np.max(centered) - np.min(centered))
+    result: dict[str, float] = {
+        "eog_std": float(np.std(centered)),
+        "eog_peak_to_peak": float(np.max(centered) - np.min(centered)),
+        "eog_slow_fast_ratio": float("nan"),
+        "eog_blink_like_events": 0.0,
+        "eog_total_power": float("nan"),
+    }
     try:
         freqs, psd = welch_psd(centered, fs)
         total = float(np.sum(psd))
@@ -34,16 +25,41 @@ def extract_eog_features(signal_array: np.ndarray, fs: float) -> dict[str, float
         fast = (freqs >= 4.0) & (freqs < 16.0)
         slow_power = float(np.sum(psd[slow]))
         fast_power = float(np.sum(psd[fast]))
-        base["eog_slow_fast_ratio"] = slow_power / fast_power if fast_power > 0 else float("nan")
-        base["eog_total_power"] = total
+        result["eog_slow_fast_ratio"] = slow_power / fast_power if fast_power > 0 else float("nan")
+        result["eog_total_power"] = total
         envelope = np.abs(signal.hilbert(centered))
         peaks, _ = signal.find_peaks(
             envelope,
             height=float(np.mean(envelope) + 2.0 * np.std(envelope)),
             distance=max(1, int(round(0.2 * fs))),
         )
-        base["eog_blink_like_events"] = float(peaks.size)
+        result["eog_blink_like_events"] = float(peaks.size)
     except ValueError:
         pass
+    return result
+
+
+def extract_eog_features(signal_array: np.ndarray, fs: float) -> dict[str, float]:
+    """Return EOG features from contiguous finite segments of a verified channel."""
+    from .features_common import weighted_feature_mean
+    from .quality import contiguous_finite_segments
+
+    array = np.asarray(signal_array, dtype=float).reshape(-1)
+    segments = contiguous_finite_segments(array, min_length=16)
+    n_finite = int(np.count_nonzero(np.isfinite(array)))
+    base: dict[str, float] = {
+        "eog_n_samples": float(array.size),
+        "eog_nonfinite_fraction": float((array.size - n_finite) / array.size) if array.size else 1.0,
+        "eog_n_gaps": float(max(len(segments) - 1, 0)),
+        "eog_n_segments": float(len(segments)),
+        "eog_features_valid": 0.0,
+    }
+    for key in ("eog_std", "eog_peak_to_peak", "eog_slow_fast_ratio",
+                "eog_blink_like_events", "eog_total_power"):
+        base[key] = float("nan")
+    if n_finite < 16 or not np.isfinite(fs) or fs <= 0:
+        return base
+
+    base.update(weighted_feature_mean([(s.size, _segment_features(s, fs)) for s in segments]))
     base["eog_features_valid"] = 1.0
     return base

@@ -8,46 +8,64 @@ source. Independent research only; not an official challenge entry.
 
 ## Target definition
 
-Use the supplied `Cognitive_Impairment` field verbatim. Only explicit `0` and `1`
-values are eligible. `other`, blank, missing and indeterminate outcomes are
-excluded from binary training and scoring and are never converted to negatives.
-The official positive/negative definition is documented in
-`CHALLENGE_REFERENCES.md` and is not reconstructed locally.
+Use the supplied `Cognitive_Impairment` field verbatim via
+`cohort.normalize_label` (shared with the audit and evaluation layers). Only
+explicit `0`/`1` (including text booleans such as `true`/`no`) enter binary
+training/evaluation. `other`, blank, missing and unrecognized values are
+excluded, never recoded as negatives. The official positive/negative definition
+is documented in `CHALLENGE_REFERENCES.md` and is not reconstructed locally.
+
+## Patient identity
+
+The composite key `SiteID_BDSPPatientID` is the sole patient identity. It is used
+for unique-patient counts, duplicate detection, split grouping, bootstrap
+resampling and join validation. Missing/blank site or patient IDs are rejected
+where a key is required. A bare patient ID may repeat across sites.
 
 ## Permitted inputs
 
-- Baseline demographics: `Age`, `Sex`, `BMI` (where permitted and available).
-- Features derived from verified PSG channels: EEG, EOG, EMG, ECG, respiratory
-  effort, airflow.
-- Explicit missing-modality indicators.
+- Baseline demographics: `Age`, `Sex`, `BMI` (unknown sex stays NaN until imputation).
+- Physiological features from verified channels: EEG, ECG, RESP, AIRFLOW, EMG,
+  EOG and SpO2 (descriptive saturation summaries only).
+- Explicit `missing_<modality>` indicators.
 
 ## Forbidden inputs
 
-`SiteID`, `BDSPPatientID`, `BidsFolder`, `SessionID`, file names,
-`Cognitive_Impairment`, `Time_to_Event`, `Last_Known_Visit_Date`,
-`Time_to_Last_Visit`, ICD/diagnosis information, and any post-PSG variable.
-Identifiers are used only for grouping, alignment and leakage checks.
+`SiteID`, `BDSPPatientID`, composite `patient_key`, `BidsFolder`, `SessionID`,
+file/recording names, `Cognitive_Impairment`, `Time_to_Event`,
+`Last_Known_Visit_Date`, `Time_to_Last_Visit`, ICD/diagnosis information and any
+post-PSG variable. Grouping identifiers are used only for validation/output.
+
+## Feature-to-cohort pipeline
+
+`build_feature_cohort.py` joins each BIDS-named feature row to exactly one
+eligible metadata record on `(BidsFolder, SessionID)`, validates site
+consistency, rejects duplicate/ambiguous keys, attaches baseline variables and
+the normalized label, and emits aggregate matched/unmatched/duplicated/excluded
+counts. The resulting cohort stays in git-ignored storage.
+
+## Signal processing
+
+Full available recording is processed with bounded partial EDF reads
+(`get_data_slice`); 30-second epochs are aggregated across chunks with documented
+robust statistics. Non-finite gaps split contiguous segments; time-dependent
+features are never computed across gaps.
 
 ## Validation
 
-`SiteID`/`BDSPPatientID` are grouping keys. Leave-one-source-out folds hold out an
-entire source; patient disjointness is asserted; imputation, scaling and any
-selection are fit on training sources only. Single-class held-out folds are
-reported as not scoreable.
+Leave-one-source-out folds hold out an entire source; composite patients remain
+grouped; imputation/scaling fit on training sources only. Single-class folds are
+reported as not scoreable. Bootstrap CIs resample composite patients as clusters.
 
 ## Metrics
 
-Primary: official age-conditioned AUROC (δ = 2 years). Secondary: age-weighted
-AUROC, ROC-AUC, PR-AUC, Brier, calibration slope/intercept, sensitivity,
-specificity, balanced accuracy, confusion matrix and bootstrap CIs.
+Primary: official age-conditioned AUROC (δ = 2 years; differential tests against
+the public scorer). Secondary: age-weighted AUROC, ROC-AUC, PR-AUC, Brier,
+calibration slope/intercept, sensitivity, specificity, balanced accuracy,
+confusion matrix and patient-cluster bootstrap CIs.
 
 ## Data governance
 
 Only the public labelled training partition may be used. Hidden validation/test
-labels are never accessed or inferred. Raw data and patient-level records stay in
-git-ignored directories. Reports contain aggregate statistics only.
-
-## Reproducibility
-
-Fixed seeds, pinned configuration checksums, package-version manifests and
-deterministic JSON reports.
+labels are never accessed or inferred. Raw data and patient-level records stay
+in git-ignored directories; public reports are aggregate only.

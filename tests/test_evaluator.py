@@ -68,3 +68,50 @@ def test_evaluate_files(tmp_path):
     labels().to_csv(labels_csv, index=False)
     valid_predictions().to_csv(predictions_csv, index=False)
     assert evaluate_files(labels_csv, predictions_csv)["valid"] is True
+
+
+def test_leakage_manifest_is_enforced_in_evaluate():
+    lab = labels()
+    pred = valid_predictions()
+    forbidden = evaluate(lab, pred, feature_columns=["Age", "eeg_delta_power", "SiteID"])
+    assert forbidden["valid"] is False
+    assert any("Forbidden" in error for error in forbidden["errors"])
+
+    label_in_features = evaluate(lab, pred, feature_columns=["Age", "Cognitive_Impairment"])
+    assert label_in_features["valid"] is False
+
+    unknown = evaluate(lab, pred, feature_columns=["Age", "mystery_column"])
+    assert unknown["valid"] is False
+    assert any("whitelist" in error for error in unknown["errors"])
+
+    clean = evaluate(lab, pred, feature_columns=["Age", "BMI", "eeg_delta_power"])
+    assert clean["valid"] is True
+    assert "cannot inspect arbitrary participant model code" in clean["automated_leakage_limitation"]
+
+
+def test_indeterminate_labels_are_excluded_from_scoring():
+    lab = labels()
+    lab["Cognitive_Impairment"] = lab["Cognitive_Impairment"].astype(object)
+    lab.loc[0, "Cognitive_Impairment"] = "other"
+    lab.loc[1, "Cognitive_Impairment"] = None
+    result = evaluate(lab, valid_predictions())
+    assert result["valid"] is True
+    assert result["n_excluded_labels"] == 2
+    assert result["metrics"]["n"] == 2
+
+
+def test_duplicate_evaluation_ids_rejected():
+    lab = labels()
+    pred = valid_predictions()
+    lab.loc[1, "BDSPPatientID"] = "p1"
+    result = evaluate(lab, pred)
+    assert result["valid"] is False
+    assert any("Duplicate" in error for error in result["errors"])
+
+
+def test_label_column_in_predictions_rejected():
+    pred = valid_predictions()
+    pred["Cognitive_Impairment"] = [1, 0, 1, 0]
+    result = evaluate(labels(), pred)
+    assert result["valid"] is False
+    assert any("label" in error for error in result["errors"])

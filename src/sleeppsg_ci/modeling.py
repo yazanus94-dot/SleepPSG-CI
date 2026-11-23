@@ -6,6 +6,7 @@ import hashlib
 import json
 from collections.abc import Sequence
 
+import numpy as np
 from sklearn.dummy import DummyClassifier
 from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
 from sklearn.impute import SimpleImputer
@@ -41,8 +42,16 @@ def encode_demographics(frame) -> "object":
     output = pd.DataFrame(index=frame.index)
     output["Age"] = pd.to_numeric(frame.get("Age"), errors="coerce")
     output["BMI"] = pd.to_numeric(frame.get("BMI"), errors="coerce")
+
+    # Explicit encoding: unknown/blank/missing/unrecognized values stay NaN so
+    # the training-fold imputer handles them. They are never silently encoded
+    # as female (0), which would fabricate a demographic value.
     sex = frame.get("Sex", pd.Series(index=frame.index, dtype=object))
-    output["Sex_male"] = sex.astype(str).str.strip().str.casefold().map({"male": 1.0, "m": 1.0}).fillna(0.0)
+    normalized = sex.astype(str).str.strip().str.casefold()
+    encoded = pd.Series(np.nan, index=frame.index, dtype=float)
+    encoded.loc[normalized.isin({"male", "m"})] = 1.0
+    encoded.loc[normalized.isin({"female", "f"})] = 0.0
+    output["Sex_male"] = encoded
     return output[list(DEMOGRAPHIC_FEATURES)]
 
 

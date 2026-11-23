@@ -12,10 +12,17 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
+
+from .identity import PATIENT_KEY_COLUMN, clean_identifier
+
+_RECORDING_RE = re.compile(r"^(sub-[A-Za-z0-9]+)[-_]ses[-_]?([A-Za-z0-9]+)$")
+_SITE_RE = re.compile(r"^[SI]\d{4}$")
 
 #: Columns that must be present in a demographics.csv for the audit to run.
 REQUIRED_COLUMNS: tuple[str, ...] = (
@@ -42,6 +49,8 @@ FORBIDDEN_PREDICTORS: tuple[str, ...] = (
     "Last_Known_Visit_Date",
     "Time_to_Last_Visit",
     "ICD",
+    PATIENT_KEY_COLUMN,  # grouping key, never a predictor
+    "recording",  # file name, traceability only
 )
 
 
@@ -114,26 +123,48 @@ class CohortAudit:
     unique_sessions: int
     duplicate_session_rows: int
     missing_site_ids: int
+    missing_patient_ids: int
+    incomplete_recording_rows: int
     missing_demographics: dict[str, int]
     records_by_site: dict[str, dict[str, int]]
-    age_summary: dict[str, dict[str, float | int]]
+    age_summary: dict[str, dict[str, float | int | None]]
     eligibility: dict[str, float | int]
     required_columns: list[str] = field(default_factory=lambda: list(REQUIRED_COLUMNS))
 
     def to_dict(self) -> dict:
-        """Return a deterministic, JSON-serializable aggregate report."""
-        return asdict(self)
+        """Return a deterministic, JSON-serializable aggregate report.
+
+        Non-finite floats (possible for empty age subgroups) are converted to
+        ``None`` so that ``to_json(allow_nan=False)`` always produces valid JSON.
+        """
+        return _json_safe(asdict(self))
 
     def to_json(self, indent: int = 2) -> str:
         """Serialize the aggregate report with stable key ordering."""
         return json.dumps(self.to_dict(), indent=indent, sort_keys=True, allow_nan=False)
 
 
-def _age_summary(ages: pd.Series) -> dict[str, float | int]:
+def _json_safe(value):
+    """Recursively replace non-finite floats with JSON ``null``."""
+    if isinstance(value, float) and not np.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
+
+    def to_json(self, indent: int = 2) -> str:
+        """Serialize the aggregate report with stable key ordering."""
+        return json.dumps(self.to_dict(), indent=indent, sort_keys=True, allow_nan=False)
+
+
+def _age_summary(ages: pd.Series) -> dict[str, float | int | None]:
     finite = pd.to_numeric(ages, errors="coerce").dropna()
     if finite.empty:
-        return {"count": 0, "min": float("nan"), "max": float("nan"),
-                "mean": float("nan"), "median": float("nan"), "std": float("nan")}
+        # JSON null, not NaN: an empty subgroup has no distribution.
+        return {"count": 0, "min": None, "max": None,
+                "mean": None, "median": None, "std": None}
     return {
         "count": int(finite.size),
         "min": float(finite.min()),
@@ -168,16 +199,31 @@ def audit_cohort(frame: pd.DataFrame) -> CohortAudit:
     folder = frame["BidsFolder"].map(_normalize_id)
     session = frame["SessionID"].map(_normalize_id)
 
-    duplicate_patient_rows = int(patient.duplicated().sum())
+    # Official identity: SiteID_BDSPPatientID. Identical bare IDs at two sites
+    # are distinct patients and must not be merged.
+    composite = [
+        f"{site_value}_{patient_value}" if site_value and patient_value else ""
+        for site_value, patient_value in zip(site, patient, strict=True)
+    ]
+    duplicate_patient_rows = int(pd.Series(composite).duplicated().sum())
     sessions = list(zip(folder, session, strict=False))
     duplicate_session_rows = int(pd.Series(sessions, dtype=object).duplicated().sum())
     missing_site_ids = int((site == "").sum())
+    missing_patient_ids = int((patient == "").sum())
+    incomplete_recording_rows = int(
+        sum(1 for s, f, sess in zip(site, folder, session, strict=True) if not (s and f and sess))
+    )
 
     missing_demographics: dict[str, int] = {}
     for column in ("Age", "Sex", "BMI", "Race", "Ethnicity"):
         if column in frame.columns:
-            numeric = pd.to_numeric(frame[column], errors="coerce") if column in {"Age", "BMI"} else frame[column]
-            missing_demographics[column] = int(numeric.isna().sum() + (numeric.astype(str).str.strip() == "").sum())
+            if column in {"Age", "BMI"}:
+                # One mask: coercion to NaN already covers blank strings, so
+                # adding a separate blank-string count would double-count.
+                missing = pd.to_numeric(frame[column], errors="coerce").isna()
+            else:
+                missing = frame[column].isna() | frame[column].astype(str).str.strip().eq("")
+            missing_demographics[column] = int(missing.sum())
 
     by_site: dict[str, dict[str, int]] = {}
     for site_id, group in frame.groupby(site, dropna=False, sort=True):
@@ -197,11 +243,13 @@ def audit_cohort(frame: pd.DataFrame) -> CohortAudit:
         negative=negative,
         excluded_indeterminate=excluded,
         missing_labels=missing_labels,
-        unique_patients=int(patient.nunique()),
+        unique_patients=int(pd.Series(composite).nunique()),
         duplicate_patient_id_rows=duplicate_patient_rows,
         unique_sessions=int(len(set(sessions))),
         duplicate_session_rows=duplicate_session_rows,
         missing_site_ids=missing_site_ids,
+        missing_patient_ids=missing_patient_ids,
+        incomplete_recording_rows=incomplete_recording_rows,
         missing_demographics=missing_demographics,
         records_by_site=by_site,
         age_summary={
@@ -227,13 +275,39 @@ def build_recording_map(frame: pd.DataFrame) -> dict[str, str]:
     validate_required_columns(frame)
     mapping: dict[str, str] = {}
     for row in frame.itertuples(index=False):
-        folder = str(getattr(row, "BidsFolder", "")).strip()
-        session = str(getattr(row, "SessionID", "")).strip()
-        site = str(getattr(row, "SiteID", "")).strip()
-        if not folder:
+        folder = clean_identifier(getattr(row, "BidsFolder", ""))
+        session = clean_identifier(getattr(row, "SessionID", ""))
+        site = clean_identifier(getattr(row, "SiteID", ""))
+        # Skip incomplete rows instead of emitting literal "nan"/empty paths.
+        if not (folder and session and site):
             continue
         mapping[f"{folder}|{session}"] = f"physiological_data/{site}/{folder}-ses{session}.edf"
     return mapping
+
+
+def parse_recording_identity(path: str | Path) -> dict[str, str]:
+    """Parse BIDS identity from an EDF file name or path.
+
+    Official physiological names follow ``sub-<BidsFolder>-ses<SessionID>.edf``.
+    The source site is taken from a path component when available, otherwise
+    from the standard ``sub-S0001...`` prefix. Missing components are returned
+    as empty strings; callers must validate them before joining.
+    """
+    file_path = Path(path)
+    match = _RECORDING_RE.match(file_path.stem)
+    folder = match.group(1) if match else ""
+    session = match.group(2) if match else ""
+
+    site = ""
+    for part in file_path.parts:
+        if _SITE_RE.match(str(part)):
+            site = str(part)
+            break
+    if not site and folder.startswith("sub-"):
+        candidate = folder[4:9]
+        if _SITE_RE.match(candidate):
+            site = candidate
+    return {"BidsFolder": folder, "SessionID": session, "SiteID": site}
 
 
 def load_cohort_csv(path: str | Path) -> pd.DataFrame:

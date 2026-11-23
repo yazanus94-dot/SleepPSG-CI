@@ -80,9 +80,46 @@ def test_invalid_labels_rejected():
         score_predictions([1, 0, -1], [0.1, 0.2, 0.3], [60, 61, 62])
 
 
-def test_bootstrap_deterministic():
+def test_bootstrap_deterministic_and_patient_clustered():
     labels, probs, ages = cohort()
-    first = bootstrap_ci(compute_auroc_age, labels, probs, ages, n_boot=30, seed=7)
-    second = bootstrap_ci(compute_auroc_age, labels, probs, ages, n_boot=30, seed=7)
+    keys = ["S0001_p1", "S0001_p1", "S0001_p2", "S0001_p2", "I0002_p3", "I0002_p3"]
+    first = bootstrap_ci(compute_auroc_age, labels, probs, ages, keys, n_boot=30, seed=7)
+    second = bootstrap_ci(compute_auroc_age, labels, probs, ages, keys, n_boot=30, seed=7)
     assert first == second
     assert first["n_valid"] > 0
+    assert first["n_patients"] == 3
+    assert first["resampling_unit"] == "composite_patient"
+
+
+def test_bootstrap_carries_all_sessions_of_a_patient():
+    """A resampled patient contributes every one of its records together."""
+    labels = [1, 0, 1, 0, 1]
+    probs = np.array([0.11, 0.22, 0.33, 0.44, 0.55])  # unique row markers
+    ages = [60, 61, 62, 63, 64]
+    keys = ["S0001_a", "S0001_a", "S0001_b", "I0002_c", "I0002_c"]
+    row_to_cluster = {0: "S0001_a", 1: "S0001_a", 2: "S0001_b", 3: "I0002_c", 4: "I0002_c"}
+    marker_to_row = {float(value): index for index, value in enumerate(probs)}
+    cluster_sizes = {"S0001_a": 2, "S0001_b": 1, "I0002_c": 2}
+    observed: list[dict[str, int]] = []
+
+    def counting_metric(y, p, a, gap=2):
+        counts: dict[str, int] = {}
+        for marker in p:
+            cluster = row_to_cluster[marker_to_row[float(marker)]]
+            counts[cluster] = counts.get(cluster, 0) + 1
+        observed.append(counts)
+        return 1.0
+
+    bootstrap_ci(counting_metric, labels, probs, ages, keys, n_boot=8, seed=3)
+    assert len(observed) == 8
+    for counts in observed:
+        for cluster, count in counts.items():
+            # A drawn patient always brings its whole cluster (possibly more
+            # than once if that patient was drawn multiple times).
+            assert count % cluster_sizes[cluster] == 0
+    assert any(counts.get("S0001_a", 0) == 4 for counts in observed)
+
+
+def test_bootstrap_rejects_blank_patient_keys():
+    with pytest.raises(ValueError, match="non-blank"):
+        bootstrap_ci(compute_auroc_age, [1, 0], [0.9, 0.1], [60, 61], ["", "S0001_p1"], n_boot=2)

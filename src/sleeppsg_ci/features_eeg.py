@@ -63,26 +63,21 @@ def spectral_edge_frequency(freqs: np.ndarray, psd: np.ndarray, fraction: float 
     return float(freqs[min(index, freqs.size - 1)])
 
 
-def extract_eeg_features(signal_array: np.ndarray, fs: float) -> dict[str, float]:
-    """Return night-level EEG spectral features; degrade gracefully on bad input."""
+def _nan_features() -> dict[str, float]:
     features: dict[str, float] = {}
-    array = np.asarray(signal_array, dtype=float).reshape(-1)
-    finite = array[np.isfinite(array)]
-    features["eeg_n_samples"] = float(array.size)
-    features["eeg_nonfinite_fraction"] = float((array.size - finite.size) / array.size) if array.size else 1.0
+    for name in (*(f"eeg_{b}_power" for b in BANDS_HZ), *(f"eeg_{b}_relative" for b in BANDS_HZ)):
+        features[name] = float("nan")
+    features.update({
+        "eeg_spectral_entropy": float("nan"),
+        "eeg_spectral_edge_95": float("nan"),
+        "eeg_theta_beta_ratio": float("nan"),
+        "eeg_alpha_delta_ratio": float("nan"),
+    })
+    return features
 
-    if finite.size < 16 or not np.isfinite(fs) or fs <= 0:
-        for name in (*(f"eeg_{b}_power" for b in BANDS_HZ), *(f"eeg_{b}_relative" for b in BANDS_HZ)):
-            features[name] = float("nan")
-        features.update({
-            "eeg_spectral_entropy": float("nan"),
-            "eeg_spectral_edge_95": float("nan"),
-            "eeg_theta_beta_ratio": float("nan"),
-            "eeg_alpha_delta_ratio": float("nan"),
-            "eeg_features_valid": 0.0,
-        })
-        return features
 
+def _spectral_features(finite: np.ndarray, fs: float) -> dict[str, float]:
+    features = _nan_features()
     freqs, psd = welch_psd(finite, fs)
     absolute = band_powers(freqs, psd)
     for name, value in absolute.items():
@@ -91,12 +86,35 @@ def extract_eeg_features(signal_array: np.ndarray, fs: float) -> dict[str, float
     for name in BANDS_HZ:
         key = f"{name}_power"
         features[f"eeg_{name}_relative"] = absolute[key] / total if total > 0 else float("nan")
-
     features["eeg_spectral_entropy"] = spectral_entropy(psd)
     features["eeg_spectral_edge_95"] = spectral_edge_frequency(freqs, psd)
     beta = absolute["beta_power"]
     delta = absolute["delta_power"]
     features["eeg_theta_beta_ratio"] = absolute["theta_power"] / beta if beta > 0 else float("nan")
     features["eeg_alpha_delta_ratio"] = absolute["alpha_power"] / delta if delta > 0 else float("nan")
+    return features
+
+
+def extract_eeg_features(signal_array: np.ndarray, fs: float) -> dict[str, float]:
+    """Return EEG spectral features, aggregating contiguous finite segments."""
+    from .features_common import weighted_feature_mean
+    from .quality import contiguous_finite_segments
+
+    array = np.asarray(signal_array, dtype=float).reshape(-1)
+    segments = contiguous_finite_segments(array, min_length=16)
+    n_finite = int(np.count_nonzero(np.isfinite(array)))
+    features: dict[str, float] = {
+        "eeg_n_samples": float(array.size),
+        "eeg_nonfinite_fraction": float((array.size - n_finite) / array.size) if array.size else 1.0,
+        "eeg_n_gaps": float(max(len(segments) - 1, 0)),
+        "eeg_n_segments": float(len(segments)),
+        "eeg_features_valid": 0.0,
+    }
+    if n_finite < 16 or not np.isfinite(fs) or fs <= 0:
+        features.update(_nan_features())
+        return features
+
+    per_segment = [(segment.size, _spectral_features(segment, fs)) for segment in segments]
+    features.update(weighted_feature_mean(per_segment))
     features["eeg_features_valid"] = 1.0
     return features

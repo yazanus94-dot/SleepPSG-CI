@@ -202,17 +202,35 @@ def bootstrap_ci(
     labels: Sequence,
     probabilities: Sequence,
     ages: Sequence,
+    patient_keys: Sequence[str],
     n_boot: int = 200,
     seed: int = 42,
     gap: int = AGE_GAP_YEARS,
-) -> dict[str, float]:
-    """Patient-level bootstrap CI for a metric taking (labels, probs, ages)."""
+) -> dict[str, float | int]:
+    """True patient-cluster bootstrap CI for a metric.
+
+    Resampling units are composite patient identities, not rows: when a patient
+    is drawn, all of their eligible sessions/records are carried together. This
+    prevents repeated visits from being treated as independent patients.
+    """
     labels_arr, probs, ages_arr = _validate_vectors(labels, probabilities, ages)
-    n = labels_arr.size
+    keys = np.asarray(patient_keys, dtype=object).reshape(-1)
+    if keys.size != labels_arr.size:
+        raise ValueError("patient_keys must match the label vector length.")
+    if any(str(key).strip() == "" for key in keys):
+        raise ValueError("patient_keys must be non-blank composite identifiers.")
+
+    groups: dict[str, np.ndarray] = {}
+    for key in sorted({str(key) for key in keys}):
+        groups[key] = np.flatnonzero(np.array([str(value) == key for value in keys]))
+    group_names = list(groups)
+    group_indices = [groups[name] for name in group_names]
+
     rng = np.random.default_rng(seed)
     values: list[float] = []
     for _ in range(n_boot):
-        index = rng.integers(0, n, size=n)
+        chosen = rng.integers(0, len(group_names), size=len(group_names))
+        index = np.concatenate([group_indices[i] for i in chosen])
         try:
             value = metric_fn(labels_arr[index], probs[index], ages_arr[index], gap=gap)
         except (ValueError, ZeroDivisionError):
@@ -220,12 +238,17 @@ def bootstrap_ci(
         if np.isfinite(value):
             values.append(float(value))
     if not values:
-        return {"mean": float("nan"), "ci_low": float("nan"), "ci_high": float("nan"), "n_valid": 0}
+        return {
+            "mean": float("nan"), "ci_low": float("nan"), "ci_high": float("nan"),
+            "n_valid": 0, "n_patients": len(group_names), "resampling_unit": "composite_patient",
+        }
     return {
         "mean": float(np.mean(values)),
         "ci_low": float(np.percentile(values, 2.5)),
         "ci_high": float(np.percentile(values, 97.5)),
         "n_valid": len(values),
+        "n_patients": len(group_names),
+        "resampling_unit": "composite_patient",
     }
 
 

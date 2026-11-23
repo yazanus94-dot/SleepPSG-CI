@@ -4,9 +4,18 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 
+import pandas as pd
 
-class LeakageError(ValueError):
-    """Raised when training and evaluation partitions overlap."""
+from .identity import LeakageError, assert_patient_disjoint as _assert_keys_disjoint, patient_keys
+
+__all__ = [
+    "LeakageError",
+    "assert_patient_disjoint",
+    "assert_patient_frames_disjoint",
+    "fold_summary",
+    "is_scoreable",
+    "leave_one_site_out",
+]
 
 
 def leave_one_site_out(sites: Sequence[str]) -> list[tuple[tuple[str, ...], str]]:
@@ -30,12 +39,18 @@ def leave_one_site_out(sites: Sequence[str]) -> list[tuple[tuple[str, ...], str]
 def assert_patient_disjoint(
     train_patients: Iterable[str], test_patients: Iterable[str]
 ) -> None:
-    """Ensure no patient identifier appears in both partitions."""
-    overlap = set(train_patients) & set(test_patients)
-    if overlap:
-        raise LeakageError(
-            f"{len(overlap)} patient identifier(s) appear in both train and test partitions."
-        )
+    """Ensure no patient identifier appears in both partitions.
+
+    For raw identifier iterables this compares the values as supplied. When
+    validating data frames use :func:`assert_patient_frames_disjoint`, which
+    builds the official composite ``SiteID_BDSPPatientID`` key first.
+    """
+    _assert_keys_disjoint(train_patients, test_patients)
+
+
+def assert_patient_frames_disjoint(train_frame: pd.DataFrame, test_frame: pd.DataFrame) -> None:
+    """Ensure no composite patient identity spans both partitions."""
+    _assert_keys_disjoint(patient_keys(train_frame), patient_keys(test_frame))
 
 
 def is_scoreable(labels: Sequence[int]) -> bool:

@@ -10,10 +10,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
-from .quality import signal_quality_report
+from .quality import aggregate_quality_reports, signal_quality_report
+from .signal_reader import EdfChunkReader
 
 VALID_MODALITIES = ("EEG", "EOG", "EMG", "ECG", "RESP", "AIRFLOW", "SPO2", "OTHER")
 
@@ -115,44 +115,30 @@ class EdfHeader:
 
 
 def inspect_edf_header(path: str | Path) -> EdfHeader:
-    """Inspect an EDF header using ``edfio`` (header-only, memory efficient)."""
-    try:
-        import edfio
-    except ImportError as exc:  # pragma: no cover - environment dependent
-        raise RuntimeError("edfio is required for EDF inspection: pip install edfio") from exc
+    """Inspect an EDF header without reading signal samples.
 
-    edf_path = Path(path)
-    if not edf_path.is_file():
-        raise FileNotFoundError(f"EDF file not found: {edf_path}")
-    try:
-        edf = edfio.read_edf(str(edf_path), lazy_load_data=True)
-    except Exception as exc:
-        raise RuntimeError(f"Could not read EDF header for {edf_path}: {exc}") from exc
-
-    channels: list[str] = []
-    rates: dict[str, float] = {}
-    units: dict[str, str] = {}
-    limits: dict[str, tuple[float | None, float | None]] = {}
-    durations: list[float] = []
-    for channel in edf.signals:
-        label = str(channel.label).strip() or f"CH{len(channels) + 1}"
-        channels.append(label)
-        rate = float(channel.sampling_frequency)
-        rates[label] = rate
-        units[label] = str(getattr(channel, "physical_dimension", "")).strip()
-        low = getattr(channel, "physical_min", None)
-        high = getattr(channel, "physical_max", None)
-        limits[label] = (float(low) if low is not None else None, float(high) if high is not None else None)
-        n_samples = len(channel.data) if hasattr(channel, "data") else 0
-        if rate > 0 and n_samples:
-            durations.append(n_samples / rate)
+    Duration comes from ``Edf.duration`` (header metadata), so this path never
+    materializes ``EdfSignal.data``.
+    """
+    with EdfChunkReader(path) as reader:
+        channels: list[str] = []
+        rates: dict[str, float] = {}
+        units: dict[str, str] = {}
+        limits: dict[str, tuple[float | None, float | None]] = {}
+        for label in reader.channels():
+            name = label or f"CH{len(channels) + 1}"
+            channels.append(name)
+            rates[name] = reader.sampling_rate(label)
+            units[name] = reader.units(label)
+            limits[name] = reader.physical_limits(label)
+        duration = reader.duration_seconds
     return EdfHeader(
-        path=str(edf_path),
+        path=str(path),
         channels=tuple(channels),
         sampling_rates=rates,
         units=units,
         physical_limits=limits,
-        duration_seconds=max(durations) if durations else None,
+        duration_seconds=duration,
     )
 
 
@@ -181,13 +167,14 @@ class RecordingAudit:
 def audit_recording(
     path: str | Path,
     rules: tuple[ChannelRule, ...] = (),
-    expected_modalities: tuple[str, ...] = ("EEG", "EOG", "EMG", "ECG", "RESP"),
+    expected_modalities: tuple[str, ...] = ("EEG", "EOG", "EMG", "ECG", "RESP", "AIRFLOW", "SPO2"),
     inspect_samples: bool = True,
+    chunk_seconds: float = 300.0,
 ) -> RecordingAudit:
-    """Audit one EDF recording; optionally inspect sample-level quality.
+    """Audit one EDF recording with bounded, chunked quality inspection.
 
-    Only a small leading segment is read when ``inspect_samples`` is true, so a
-    full night is never loaded into memory during inventory.
+    The quality path aggregates per-chunk reports; it never loads an entire
+    channel to compute statistics.
     """
     header = inspect_edf_header(path)
     site = ""
@@ -206,17 +193,16 @@ def audit_recording(
     quality: dict[str, dict] = {}
     reasons: list[str] = []
     if inspect_samples:
-        try:
-            import edfio
-        except ImportError:  # pragma: no cover
-            edfio = None
-        if edfio is not None:
-            edf = edfio.read_edf(str(path), lazy_load_data=False)
-            for channel in edf.signals:
-                label = str(channel.label).strip()
-                data = np.asarray(channel.data, dtype=float)
-                low, high = header.physical_limits.get(label, (None, None))
-                report = signal_quality_report(data, header.sampling_rates.get(label), low, high)
+        with EdfChunkReader(path) as reader:
+            for label in reader.channels():
+                low, high = reader.physical_limits(label)
+                fs = reader.sampling_rate(label)
+                reports = [
+                    signal_quality_report(chunk, fs, low, high)
+                    for _, chunk in reader.iter_chunks(label, chunk_seconds)
+                ]
+                report = aggregate_quality_reports(reports)
+                report["duration_seconds"] = header.duration_seconds
                 quality[label] = report
                 for reason in report["reasons"]:
                     reasons.append(f"{label}:{reason}")
