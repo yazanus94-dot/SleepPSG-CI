@@ -1,10 +1,9 @@
-# Audit report — SleepPSG-CI (real-data readiness sprint)
+# Audit report — SleepPSG-CI (data-access readiness sprint)
 
-Inspection date: **2026-11-23**. Baseline commit: `48bfcdd...`.
-Status: software implemented and tested on synthetic fixtures; **no real-data
-experiments were run, no clinical model performance was measured, and no real EDF
-recording was processed**. This sprint verified access, fixed two reproducible
-real-data defects, and prepared the experiment entry point.
+Inspection date: **2026-11-23**. Baseline commit: `3eba1f4...`.
+Status: software implemented and tested on synthetic/mocked fixtures; **no real
+authentication, terms acceptance, dataset download, real EDF processing, model
+training or clinical performance measurement occurred in this sprint**.
 
 ## Work completed
 
@@ -63,6 +62,27 @@ real-data defects, and prepared the experiment entry point.
 - Added regression tests for duplicate labels, epoch capping, source validation,
   provenance and the experiment contract.
 
+### This sprint (Kaggle access readiness)
+
+- `kaggle_credentials_present()` now recognizes `KAGGLE_USERNAME`/`KAGGLE_KEY`, a
+  valid `~/.kaggle/kaggle.json`, and a valid `kaggle.json` in a custom
+  `KAGGLE_CONFIG_DIR`. `credential_source()` reports only the source label, never
+  values; `AccessAudit.credential_source` is included in the secret-free report.
+- Added `fetch_remote_file_size()` to read the exact file size from the public
+  paginated Kaggle file inventory (injectable opener for tests). Confirmed
+  `demographics.csv` = 131,863 bytes; no file was downloaded.
+- Downloads are now restricted to `demographics.csv` only. The remote size is
+  checked against the 500 MiB cap *before* download, and the extracted file size
+  must match the remote size afterwards; otherwise the file is rejected.
+- Added `scripts/download_metadata.py` with the mandatory
+  `--confirm-bsdp-terms-accepted` flag. The script never accepts legal terms
+  automatically; it records an aggregate download report and SHA-256 checksum.
+- Added 24 mocked tests covering all credential sources, incomplete/invalid
+  configs, no-leakage assertions, paginated size lookup, allowlist/size gates,
+  pre-download refusal, extracted-size verification and script confirmation.
+- No credentials were configured, no terms accepted, no network data downloaded
+  and no EDF touched during implementation or testing.
+
 ## Files inspected
 
 Official reference material (read-only): `project-4-physionet-2026-psg-cognitive-impairment/evaluate_model.py`
@@ -81,7 +101,7 @@ scaffold was created from the documented specification in the prior commit.
 | Small training set size | 230,024,509,878 bytes (~214 GiB) |
 | Large training set size | ~1.2 TiB |
 | `demographics.csv` size | **131,863 bytes** (public file inventory, 2026-11-23) |
-| Kaggle credentials configured | No (`KAGGLE_USERNAME`, `KAGGLE_KEY`, `KAGGLE_CONFIG_DIR` unset) |
+| Kaggle credentials configured | No (env vars unset, no `kaggle.json` in home or custom dir) |
 | `kaggle` CLI installed | No |
 | BDSP terms acceptance verified | Not possible without authenticated account |
 | Dataset content downloaded | **None** |
@@ -99,9 +119,12 @@ command is ready and documented.
 **Exact next user action:** log into the Kaggle account, open
 https://www.kaggle.com/datasets/physionet/physionetchallenge2026data, accept the
 BDSP Credentialed Health Data License v1.0.0 personally, create a Kaggle API
-token, install the `kaggle` CLI, configure `KAGGLE_USERNAME`/`KAGGLE_KEY`, then
-run `python scripts/inventory_dataset.py` and the documented single-file
-download followed by `python scripts/audit_metadata.py data/demographics.csv`.
+token, install the `kaggle` CLI, and configure credentials via env vars,
+`~/.kaggle/kaggle.json` or `KAGGLE_CONFIG_DIR`. Then run, in order:
+`python scripts/inventory_dataset.py`,
+`python scripts/download_metadata.py --confirm-bsdp-terms-accepted --destination data`,
+`python scripts/audit_metadata.py data/demographics.csv --output outputs/metadata_audit.json`.
+The full command list is in README section 3.1.
 
 ## Exact verified counts
 
@@ -115,12 +138,13 @@ download followed by `python scripts/audit_metadata.py data/demographics.csv`.
 
 ## Test results
 
-- `python -m pytest` → **144 passed, 0 failed, 0 skipped** (synthetic fixtures only;
-  includes synthetic EDFs, end-to-end join + CLI, chunk-read/no-`.data` test, gap
-  tests, official-scorer differential tests, bootstrap cluster test, airflow/SpO2
-  feature-selection tests, incomplete-identity counting tests, V/mV/uV unit
-  equivalence tests, unit-aware feature-eligibility tests, duplicate-label and
-  epoch-cap regressions, and experiment source/provenance tests).
+- `python -m pytest` → **168 passed, 0 failed, 0 skipped** (synthetic/mocked
+  fixtures only; includes synthetic EDFs, end-to-end join + CLI, chunk-read/no-
+  `.data` test, gap tests, official-scorer differential tests, bootstrap cluster
+  test, airflow/SpO2 feature-selection tests, incomplete-identity counting tests,
+  V/mV/uV unit equivalence tests, unit-aware feature-eligibility tests,
+  duplicate-label and epoch-cap regressions, experiment source/provenance tests,
+  and 24 mocked data-access/credential/download-confirmation tests).
 - `ruff check .` → **All checks passed!**
 - CLI smoke tests for all scripts passed on synthetic data; site-held-out
   evaluation produced 3 folds × 6 models with integrated patient bootstrap CIs.

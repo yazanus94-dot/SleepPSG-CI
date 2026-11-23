@@ -1,0 +1,258 @@
+"""Data-access readiness tests using mocked HTTP and CLI responses only.
+
+No real credentials are configured, no network download is performed and no
+Kaggle terms are accepted in these tests.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from scripts import download_metadata as download_script
+from sleeppsg_ci import data_access as da
+from sleeppsg_ci.data_access import (
+    CREDENTIAL_SOURCE_CONFIG_DIR,
+    CREDENTIAL_SOURCE_ENV,
+    CREDENTIAL_SOURCE_HOME,
+    CREDENTIAL_SOURCE_NONE,
+    DataAccessError,
+    access_audit_to_dict,
+    audit_access,
+    credential_source,
+    download_metadata_files,
+    fetch_remote_file_size,
+    kaggle_credentials_present,
+    validate_download_request,
+    validate_remote_size,
+)
+
+SECRET = "SENTINEL_SECRET_SHOULD_NEVER_APPEAR_98765"
+
+
+def write_json(path: Path, payload: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+class FakeResponse:
+    def __init__(self, payload: dict) -> None:
+        self._data = json.dumps(payload).encode("utf-8")
+        self.closed = False
+
+    def read(self) -> bytes:
+        return self._data
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def paginated(pages: list[dict]):
+    calls: list[str] = []
+
+    def opener(url: str, timeout: int = 30) -> FakeResponse:
+        calls.append(url)
+        return FakeResponse(pages[min(len(calls) - 1, len(pages) - 1)])
+
+    return opener, calls
+
+
+# --- credential detection ---------------------------------------------------
+
+def test_environment_credentials(tmp_path):
+    env = {"KAGGLE_USERNAME": "user", "KAGGLE_KEY": SECRET}
+    assert kaggle_credentials_present(environ=env, home=tmp_path / "empty")
+    assert credential_source(environ=env, home=tmp_path / "empty") == CREDENTIAL_SOURCE_ENV
+
+
+def test_home_kaggle_json_credentials(tmp_path):
+    home = tmp_path / "home"
+    write_json(home / ".kaggle" / "kaggle.json", {"username": "user", "key": SECRET})
+    assert kaggle_credentials_present(environ={}, home=home)
+    assert credential_source(environ={}, home=home) == CREDENTIAL_SOURCE_HOME
+
+
+def test_custom_kaggle_config_dir(tmp_path):
+    config = tmp_path / "custom_kaggle"
+    write_json(config / "kaggle.json", {"username": "user", "key": SECRET})
+    env = {"KAGGLE_CONFIG_DIR": str(config)}
+    assert kaggle_credentials_present(environ=env, home=tmp_path / "empty")
+    assert credential_source(environ=env, home=tmp_path / "empty") == CREDENTIAL_SOURCE_CONFIG_DIR
+
+
+def test_missing_credentials(tmp_path):
+    assert not kaggle_credentials_present(environ={}, home=tmp_path / "empty")
+    assert credential_source(environ={}, home=tmp_path / "empty") == CREDENTIAL_SOURCE_NONE
+
+
+@pytest.mark.parametrize("payload", [
+    {"username": "user"},
+    {"key": "key"},
+    {"username": "", "key": SECRET},
+    {"username": "user", "key": ""},
+    ["not", "a", "dict"],
+])
+def test_incomplete_or_invalid_config(tmp_path, payload):
+    home = tmp_path / "home"
+    write_json(home / ".kaggle" / "kaggle.json", payload)
+    assert not kaggle_credentials_present(environ={}, home=home)
+
+
+def test_invalid_json_and_missing_file(tmp_path):
+    home = tmp_path / "home"
+    (home / ".kaggle").mkdir(parents=True)
+    (home / ".kaggle" / "kaggle.json").write_text("{not json", encoding="utf-8")
+    assert not kaggle_credentials_present(environ={}, home=home)
+    assert not kaggle_credentials_present(environ={}, home=tmp_path / "other")
+
+
+def test_audit_reports_source_without_values(tmp_path):
+    env = {"KAGGLE_USERNAME": "user", "KAGGLE_KEY": SECRET}
+    report = access_audit_to_dict(audit_access(environ=env, home=tmp_path / "empty"))
+    assert report["credential_source"] == CREDENTIAL_SOURCE_ENV
+    assert report["kaggle_credentials_present"] is True
+    assert SECRET not in json.dumps(report)
+
+
+def test_no_credential_leakage_in_error_messages(tmp_path, monkeypatch):
+    monkeypatch.setenv("KAGGLE_USERNAME", "user")
+    monkeypatch.setenv("KAGGLE_KEY", SECRET)
+    monkeypatch.setattr(da.shutil, "which", lambda _name: None)
+
+    # No explicit terms confirmation: error must not echo any credential.
+    with pytest.raises(DataAccessError) as exc:
+        download_metadata_files(tmp_path / "data", confirm_bsdp_terms=False)
+    assert SECRET not in str(exc.value)
+
+    # Credentials present but CLI missing: blocker must not echo any credential.
+    with pytest.raises(DataAccessError) as exc:
+        download_metadata_files(tmp_path / "data", confirm_bsdp_terms=True)
+    assert SECRET not in str(exc.value)
+
+
+# --- allowlist and size checks ----------------------------------------------
+
+def test_download_allowlist_and_size_cap():
+    validate_download_request(["demographics.csv"], 131_863)
+    for files in (["ICD_codes_CI.csv"], ["recordings.edf"],
+                  ["demographics.csv", "ICD_codes_CI.csv"]):
+        with pytest.raises(DataAccessError):
+            validate_download_request(files, 131_863)
+    with pytest.raises(DataAccessError):
+        validate_download_request(["demographics.csv"], da.MAX_METADATA_BYTES + 1)
+
+
+def test_remote_size_validation():
+    validate_remote_size(131_863)
+    for size in (0, -1, da.MAX_METADATA_BYTES + 1):
+        with pytest.raises(DataAccessError):
+            validate_remote_size(size)
+
+
+def test_fetch_remote_size_from_paginated_inventory():
+    first = {"datasetFiles": [{"name": "ICD_codes_CI.csv", "totalBytes": 88_731}],
+             "nextPageToken": "page-2"}
+    second = {"datasetFiles": [{"name": "demographics.csv", "totalBytes": 131_863}]}
+    opener, calls = paginated([first, second])
+    assert fetch_remote_file_size(opener=opener) == 131_863
+    assert len(calls) == 2
+    assert "pageToken=page-2" in calls[1]
+
+
+def test_fetch_remote_size_rejects_non_allowlisted_file():
+    with pytest.raises(DataAccessError):
+        fetch_remote_file_size("ICD_codes_CI.csv", opener=paginated([])[0])
+
+
+def test_fetch_remote_size_missing_file():
+    opener, _ = paginated([{"datasetFiles": []}])
+    with pytest.raises(DataAccessError, match="not found"):
+        fetch_remote_file_size(opener=opener)
+
+
+# --- download safeguards (all mocked) --------------------------------------
+
+def _authorised(monkeypatch):
+    monkeypatch.setenv("KAGGLE_USERNAME", "user")
+    monkeypatch.setenv("KAGGLE_KEY", SECRET)
+    monkeypatch.setattr(da.shutil, "which", lambda _name: "/usr/bin/kaggle")
+
+
+def test_download_checks_remote_size_before_invoking_cli(tmp_path, monkeypatch):
+    _authorised(monkeypatch)
+    monkeypatch.setattr(da, "fetch_remote_file_size", lambda *_a, **_k: da.MAX_METADATA_BYTES + 1)
+    called = []
+
+    def runner(*_a, **_k):
+        called.append(True)
+        raise AssertionError("CLI must not run when the remote file is too large")
+
+    monkeypatch.setattr(da.subprocess, "run", runner)
+    with pytest.raises(DataAccessError, match="above the"):
+        download_metadata_files(tmp_path / "data", confirm_bsdp_terms=True)
+    assert called == []
+
+
+def test_download_requires_explicit_terms_confirmation(tmp_path, monkeypatch):
+    _authorised(monkeypatch)
+    monkeypatch.setattr(da, "fetch_remote_file_size", lambda *_a, **_k: pytest.fail("no fetch"))
+    with pytest.raises(DataAccessError, match="explicitly confirmed"):
+        download_metadata_files(tmp_path / "data", confirm_bsdp_terms=False)
+
+
+def test_download_verifies_extracted_size(tmp_path, monkeypatch):
+    _authorised(monkeypatch)
+    monkeypatch.setattr(da, "fetch_remote_file_size", lambda *_a, **_k: 100)
+    target = tmp_path / "data"
+    target.mkdir()
+
+    def runner(command, **_kwargs):
+        (target / "demographics.csv").write_bytes(b"x" * 50)
+        return type("Result", (), {"returncode": 0})()
+
+    monkeypatch.setattr(da.subprocess, "run", runner)
+    with pytest.raises(DataAccessError, match="size mismatch"):
+        download_metadata_files(target, confirm_bsdp_terms=True)
+
+
+def test_download_success_with_mocked_cli(tmp_path, monkeypatch):
+    _authorised(monkeypatch)
+    monkeypatch.setattr(da, "fetch_remote_file_size", lambda *_a, **_k: 100)
+    target = tmp_path / "data"
+
+    def runner(command, **_kwargs):
+        assert command[0] == "kaggle" and "demographics.csv" in command
+        (target / "demographics.csv").write_bytes(b"x" * 100)
+        return type("Result", (), {"returncode": 0})()
+
+    monkeypatch.setattr(da.subprocess, "run", runner)
+    paths = download_metadata_files(target, confirm_bsdp_terms=True)
+    assert paths == [target / "demographics.csv"]
+    assert paths[0].stat().st_size == 100
+
+
+# --- download script --------------------------------------------------------
+
+def test_script_requires_confirmation(tmp_path, monkeypatch):
+    monkeypatch.setattr(download_script, "fetch_remote_file_size", lambda *_a, **_k: pytest.fail("no fetch"))
+    assert download_script.main(["--destination", str(tmp_path / "data")]) == 2
+
+
+def test_script_without_credentials_stops(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        download_script, "audit_access",
+        lambda *_a, **_k: audit_access(environ={}, home=tmp_path / "empty"),
+    )
+    monkeypatch.setattr(download_script, "fetch_remote_file_size", lambda *_a, **_k: pytest.fail("no fetch"))
+    code = download_script.main([
+        "--confirm-bsdp-terms-accepted", "--destination", str(tmp_path / "data")
+    ])
+    assert code == 2
+
+
+def test_script_parser_requires_explicit_flag():
+    args = download_script.build_parser().parse_args([])
+    assert args.confirm_bsdp_terms_accepted is False
+    assert args.destination == "data"

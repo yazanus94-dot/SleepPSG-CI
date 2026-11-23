@@ -68,17 +68,49 @@ metadata command exits with a clear error and never writes a fake empty report.
   (~129 KiB) — comfortably below the 500 MiB selective-retrieval cap.
 - Labelled training sources: `S0001`, `I0002`, `I0006`. Hidden sources `I0004`
   and `I0007` are never used as labelled data.
-- Local blockers: `KAGGLE_USERNAME`, `KAGGLE_KEY`, `KAGGLE_CONFIG_DIR` are unset
-  and the `kaggle` CLI is not installed. Acceptance of the BDSP Credentialed
-  Health Data License v1.0.0 cannot be verified without an authenticated account,
-  and terms must never be accepted on another person's behalf.
+- Local blockers: `KAGGLE_USERNAME`, `KAGGLE_KEY` and `KAGGLE_CONFIG_DIR` are unset,
+  no `~/.kaggle/kaggle.json` exists, and the `kaggle` CLI is not installed.
+  Acceptance of the BDSP Credentialed Health Data License v1.0.0 cannot be
+  verified without an authenticated account, and terms must never be accepted on
+  another person's behalf.
 
-**Exact manual action required:** log into the Kaggle account, open
-https://www.kaggle.com/datasets/physionet/physionetchallenge2026data and accept the
-BDSP data terms yourself; create a Kaggle API token (Account → Create New API
-Token) and install the `kaggle` CLI; then configure `KAGGLE_USERNAME`/`KAGGLE_KEY`
-(or `~/.kaggle/kaggle.json`) and run the single-file command below. Only then can
-the real metadata audit be performed.
+Credential detection accepts any of three configurations (values are never
+printed): `KAGGLE_USERNAME` + `KAGGLE_KEY`, a valid `~/.kaggle/kaggle.json`, or a
+valid `kaggle.json` under a custom `KAGGLE_CONFIG_DIR`.
+
+**Exact manual setup and retrieval commands** (run these yourself; no terms are
+accepted programmatically):
+
+```bash
+# 1. Install the Kaggle CLI and the project (dev extras)
+python -m pip install kaggle
+python -m pip install -e ".[dev]"
+
+# 2. Log in at https://www.kaggle.com and personally ACCEPT the BDSP terms at
+#    https://www.kaggle.com/datasets/physionet/physionetchallenge2026data
+#    Kaggle account -> "Create New API Token" -> save as ~/.kaggle/kaggle.json
+#    (JSON keys: "username" and "key"), or set KAGGLE_USERNAME / KAGGLE_KEY.
+#    For a custom location: export KAGGLE_CONFIG_DIR=/path/to/config
+
+# 3. Read-only access audit (shows only presence/source, never values)
+python scripts/inventory_dataset.py
+
+# 4. Download ONLY demographics.csv. The explicit flag is your assertion that
+#    you already accepted the terms; the script never accepts them for you.
+python scripts/download_metadata.py \
+  --confirm-bsdp-terms-accepted \
+  --destination data \
+  --output-report outputs/metadata_download_report.json
+
+# 5. Real aggregate metadata audit (never commit the patient-level CSV)
+python scripts/audit_metadata.py data/demographics.csv \
+  --output outputs/metadata_audit.json
+```
+
+`download_metadata.py` verifies the remote size from the public Kaggle file
+inventory, refuses anything above 500 MiB *before* downloading, and checks the
+extracted file size against the remote size afterwards. Downloaded data stays in
+the git-ignored `data/` directory.
 
 ## 4. Data governance and privacy
 
@@ -249,8 +281,10 @@ CI runs without Kaggle credentials or PhysioNet downloads. Evidence categories
 are kept strictly separate:
 
 - **Implemented software:** the full pipeline (see status table).
-- **Synthetic test results:** 144 automated tests exercise algorithm behavior on
-  synthetic metadata/EDFs; these are software checks, never clinical performance.
+- **Synthetic test results:** 168 automated tests (24 mocked data-access tests
+  added for credential detection, size verification and confirmation gating)
+  exercise algorithm behavior without real downloads; these are software checks,
+  never clinical performance.
 - **Real metadata audit results:** none — `demographics.csv` was not retrieved.
 - **Real EDF processing results:** none — no recording was downloaded or read.
 - **Actual model-performance results:** none — no real patient-data model was fitted.
