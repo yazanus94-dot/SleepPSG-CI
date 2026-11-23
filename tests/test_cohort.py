@@ -141,10 +141,13 @@ def test_recording_map_skips_incomplete_rows(tmp_path):
 
 
 def test_parse_recording_identity():
+    from pathlib import Path
+
     from sleeppsg_ci.cohort import parse_recording_identity
 
+    # Platform-neutral path: pathlib handles separators on Windows and Linux.
     parsed = parse_recording_identity(
-        r"C:\data\physiological_data\S0001\sub-S0001111197789-ses2.edf"
+        Path("data") / "physiological_data" / "S0001" / "sub-S0001111197789-ses2.edf"
     )
     assert parsed == {
         "BidsFolder": "sub-S0001111197789",
