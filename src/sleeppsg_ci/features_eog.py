@@ -39,12 +39,15 @@ def _segment_features(finite: np.ndarray, fs: float) -> dict[str, float]:
     return result
 
 
-def extract_eog_features(signal_array: np.ndarray, fs: float) -> dict[str, float]:
-    """Return EOG features from contiguous finite segments of a verified channel."""
+def extract_eog_features(signal_array: np.ndarray, fs: float, unit: str | None = None) -> dict[str, float]:
+    """Return EOG features in canonical microvolts from finite segments."""
     from .features_common import weighted_feature_mean
     from .quality import contiguous_finite_segments
+    from .units import apply_unit_conversion, resolve_unit_conversion, unit_feature_flags
 
     array = np.asarray(signal_array, dtype=float).reshape(-1)
+    handling = resolve_unit_conversion("EOG", unit) if unit is not None else None
+    array = apply_unit_conversion(array, handling)
     segments = contiguous_finite_segments(array, min_length=16)
     n_finite = int(np.count_nonzero(np.isfinite(array)))
     base: dict[str, float] = {
@@ -54,6 +57,7 @@ def extract_eog_features(signal_array: np.ndarray, fs: float) -> dict[str, float
         "eog_n_segments": float(len(segments)),
         "eog_features_valid": 0.0,
     }
+    base.update(unit_feature_flags("eog", handling))
     for key in ("eog_std", "eog_peak_to_peak", "eog_slow_fast_ratio",
                 "eog_blink_like_events", "eog_total_power"):
         base[key] = float("nan")

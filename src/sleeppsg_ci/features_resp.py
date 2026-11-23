@@ -41,12 +41,20 @@ def _segment_features(finite: np.ndarray, fs: float) -> dict[str, float]:
     return result
 
 
-def extract_resp_features(signal_array: np.ndarray, fs: float) -> dict[str, float]:
-    """Estimate respiratory features within contiguous finite segments only."""
+def extract_resp_features(signal_array: np.ndarray, fs: float, unit: str | None = None) -> dict[str, float]:
+    """Estimate respiratory features within contiguous finite segments.
+
+    Respiratory effort/airflow units are source-specific: no conversion is
+    invented. Rate, variability and regularity are unit-invariant;
+    ``resp_signal_range`` is unit-dependent and must not be compared across
+    sites with different sensor units. The original unit is recorded as a flag.
+    """
     from .features_common import weighted_feature_mean
     from .quality import contiguous_finite_segments
+    from .units import resolve_unit_conversion, unit_feature_flags
 
     array = np.asarray(signal_array, dtype=float).reshape(-1)
+    handling = resolve_unit_conversion("RESP", unit) if unit is not None else None
     segments = contiguous_finite_segments(array, min_length=64)
     n_finite = int(np.count_nonzero(np.isfinite(array)))
     base: dict[str, float] = {
@@ -56,6 +64,7 @@ def extract_resp_features(signal_array: np.ndarray, fs: float) -> dict[str, floa
         "resp_n_segments": float(len(segments)),
         "resp_features_valid": 0.0,
     }
+    base.update(unit_feature_flags("resp", handling))
     for key in ("resp_rate_bpm", "resp_amplitude_cv", "resp_signal_range", "resp_regularity"):
         base[key] = float("nan")
     if n_finite < 64 or not np.isfinite(fs) or fs <= 0:

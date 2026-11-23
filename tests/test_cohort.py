@@ -157,3 +157,75 @@ def test_parse_recording_identity():
     incomplete = parse_recording_identity("unexpected.edf")
     assert incomplete["BidsFolder"] == ""
     assert incomplete["SessionID"] == ""
+
+
+def identity_fixture():
+    """Rows mixing complete/incomplete identities and valid duplicate sessions."""
+    return pd.DataFrame({
+        "SiteID": ["S0001", "S0001", "I0002", "S0001", "S0001",
+                   "", "", "S0001", "S0001", "S0001"],
+        "BDSPPatientID": ["p1", "p1", "p1", "", "", "p9", "p10", "p2", "p3", "p1"],
+        "BidsFolder": ["sub-A", "sub-A", "sub-B", "sub-C", "sub-D",
+                       "sub-E", "sub-F", "", "sub-G", "sub-A"],
+        "SessionID": ["1", "2", "1", "1", "2", "1", "1", "1", "", "1"],
+        "Age": [60] * 10,
+        "Cognitive_Impairment": [1, 0, 1, 0, 1, 0, 1, 0, 1, 0],
+    })
+
+
+def test_incomplete_identity_rows_excluded_from_patient_and_session_counts():
+    audit = audit_cohort(identity_fixture())
+    # Valid composite keys: S0001_p1 (x3), I0002_p1, S0001_p2, S0001_p3.
+    assert audit.unique_patients == 4
+    assert audit.duplicate_patient_id_rows == 2
+    # Blank patient IDs and blank site IDs are reported separately, not merged.
+    assert audit.missing_patient_ids == 2
+    assert audit.missing_site_ids == 2
+    # Valid sessions require SiteID + BidsFolder + SessionID; one true duplicate.
+    assert audit.unique_sessions == 5
+    assert audit.duplicate_session_rows == 1
+    assert audit.incomplete_recording_rows == 4
+
+
+def test_blank_identifiers_are_not_counted_as_one_patient():
+    frame = pd.DataFrame({
+        "SiteID": ["S0001", "S0001", "S0001"],
+        "BDSPPatientID": ["", "", None],
+        "BidsFolder": ["sub-A", "sub-B", "sub-C"],
+        "SessionID": ["1", "1", "1"],
+        "Age": [60, 61, 62],
+        "Cognitive_Impairment": [1, 0, 1],
+    })
+    audit = audit_cohort(frame)
+    assert audit.unique_patients == 0
+    assert audit.duplicate_patient_id_rows == 0
+    assert audit.missing_patient_ids == 3
+    assert audit.unique_sessions == 3
+    assert audit.duplicate_session_rows == 0
+
+
+def test_missing_sites_are_not_counted_as_one_patient_or_session():
+    frame = pd.DataFrame({
+        "SiteID": ["", "", ""],
+        "BDSPPatientID": ["p1", "p2", "p3"],
+        "BidsFolder": ["sub-A", "sub-B", "sub-C"],
+        "SessionID": ["1", "1", "1"],
+        "Age": [60, 61, 62],
+        "Cognitive_Impairment": [1, 0, 1],
+    })
+    audit = audit_cohort(frame)
+    assert audit.unique_patients == 0
+    assert audit.unique_sessions == 0
+    assert audit.duplicate_patient_id_rows == 0
+    assert audit.duplicate_session_rows == 0
+    assert audit.missing_site_ids == 3
+
+
+def test_identity_report_is_patient_free_valid_json():
+    audit = audit_cohort(identity_fixture())
+    payload = audit.to_json()
+    parsed = json.loads(payload)
+    assert "p1" not in payload
+    assert "sub-A" not in payload
+    assert parsed["unique_patients"] == 4
+    assert parsed["unique_sessions"] == 5

@@ -1,8 +1,9 @@
-# Audit report — SleepPSG-CI (corrective sprint)
+# Audit report — SleepPSG-CI (final corrective sprint)
 
-Inspection date: **2026-11-23**. Previous commit: `226b152d...`.
+Inspection date: **2026-11-23**. Previous commit: `a974e67...`.
 Status: software implemented and tested on synthetic fixtures; **no real-data
-experiments were run**.
+experiments were run, no clinical model performance was measured, and no real EDF
+recording was processed**.
 
 ## Work completed
 
@@ -18,7 +19,11 @@ experiments were run**.
   `edfio` partial reads (`get_data_slice`); no `EdfSignal.data` materialization.
   30-second epochs are buffered across chunks and aggregated robustly.
 - All verified channels per modality are retained with stable channel-specific
-  prefixes; AIRFLOW added to the modality loop; SpO2 extractor implemented.
+  prefixes; all **seven** modality extractors (EEG, ECG, RESP, AIRFLOW, EMG, EOG,
+  SpO2) are included in signal-only and combined model feature selection.
+- Explicit unit harmonization (`units.py`): EEG/EOG/EMG → uV, ECG → mV, SpO2 → %
+  (fraction→percent only when confirmed), RESP/AIRFLOW unconverted. Original
+  units and conversion status are kept as non-predictor `unit_*` metadata.
 - Non-finite gaps split contiguous segments; ECG/respiratory features are not
   computed across gaps.
 - Bootstrap is a true patient-cluster bootstrap and CIs are integrated into fold
@@ -69,9 +74,11 @@ standalone `demographics.csv`. No hidden validation/test labels were accessed.
 
 ## Test results
 
-- `python -m pytest` → **102 passed** (synthetic fixtures only; includes synthetic
-  EDFs, an end-to-end join + CLI test, chunk-read/no-`.data` test, gap tests,
-  official-scorer differential tests and bootstrap cluster test).
+- `python -m pytest` → **120 passed, 0 failed, 0 skipped** (synthetic fixtures only;
+  includes synthetic EDFs, end-to-end join + CLI, chunk-read/no-`.data` test, gap
+  tests, official-scorer differential tests, bootstrap cluster test, airflow/SpO2
+  feature-selection tests, incomplete-identity counting tests and V/mV/uV unit
+  equivalence tests).
 - `ruff check .` → **All checks passed!**
 - CLI smoke tests for all scripts passed on synthetic data; site-held-out
   evaluation produced 3 folds × 6 models with integrated patient bootstrap CIs.
@@ -94,8 +101,11 @@ Clean. CI matrix: Python 3.10, 3.11, 3.12; no Kaggle credentials required.
 Only three labelled sources exist; no broad geographic generalization claim.
 The challenge label is used verbatim; no outcome is reconstructed. Ages >89 are
 encoded as 90 in the source. All smoke-run outputs are synthetic software checks,
-**not** clinical performance. Full-night chunking is validated on synthetic EDFs
-only. SpO2 features are descriptive and not event-based hypoxemia indices.
+**not** clinical performance. Full-night chunking and unit-harmonization rules
+are validated on synthetic EDFs only. SpO2 features are descriptive and not
+event-based hypoxemia indices. RESP/AIRFLOW units are unconverted, so
+`resp_signal_range` is not comparable across sites; unit differences limit
+cross-site validation until real EDFs are processed.
 
 ## Unfinished work / blockers
 

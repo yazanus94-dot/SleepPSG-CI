@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .identity import PATIENT_KEY_COLUMN, clean_identifier
+from .identity import PATIENT_KEY_COLUMN, clean_identifier, composite_patient_key
 
 _RECORDING_RE = re.compile(r"^(sub-[A-Za-z0-9]+)[-_]ses[-_]?([A-Za-z0-9]+)$")
 _SITE_RE = re.compile(r"^[SI]\d{4}$")
@@ -154,10 +154,6 @@ def _json_safe(value):
         return [_json_safe(item) for item in value]
     return value
 
-    def to_json(self, indent: int = 2) -> str:
-        """Serialize the aggregate report with stable key ordering."""
-        return json.dumps(self.to_dict(), indent=indent, sort_keys=True, allow_nan=False)
-
 
 def _age_summary(ages: pd.Series) -> dict[str, float | int | None]:
     finite = pd.to_numeric(ages, errors="coerce").dropna()
@@ -199,15 +195,31 @@ def audit_cohort(frame: pd.DataFrame) -> CohortAudit:
     folder = frame["BidsFolder"].map(_normalize_id)
     session = frame["SessionID"].map(_normalize_id)
 
-    # Official identity: SiteID_BDSPPatientID. Identical bare IDs at two sites
-    # are distinct patients and must not be merged.
-    composite = [
-        f"{site_value}_{patient_value}" if site_value and patient_value else ""
-        for site_value, patient_value in zip(site, patient, strict=True)
-    ]
-    duplicate_patient_rows = int(pd.Series(composite).duplicated().sum())
-    sessions = list(zip(folder, session, strict=False))
-    duplicate_session_rows = int(pd.Series(sessions, dtype=object).duplicated().sum())
+    # Official identity: SiteID_BDSPPatientID, built with the shared helper.
+    # Incomplete rows never produce a key, so blanks cannot collapse into a
+    # single fake patient or be counted as duplicates of each other.
+    composite: list[str] = []
+    for site_value, patient_value in zip(site, patient, strict=True):
+        if site_value and patient_value:
+            composite.append(composite_patient_key(site_value, patient_value))
+        else:
+            composite.append("")
+    valid_patients = [key for key in composite if key]
+    unique_patients = len(set(valid_patients))
+    duplicate_patient_id_rows = len(valid_patients) - unique_patients
+
+    # A valid recording session needs SiteID + BidsFolder + SessionID. Rows
+    # missing any component are excluded from session totals and duplicates.
+    sessions: list[str] = []
+    for site_value, folder_value, session_value in zip(site, folder, session, strict=True):
+        if site_value and folder_value and session_value:
+            sessions.append(f"{site_value}|{folder_value}|{session_value}")
+        else:
+            sessions.append("")
+    valid_sessions = [key for key in sessions if key]
+    unique_sessions = len(set(valid_sessions))
+    duplicate_session_rows = len(valid_sessions) - unique_sessions
+
     missing_site_ids = int((site == "").sum())
     missing_patient_ids = int((patient == "").sum())
     incomplete_recording_rows = int(
@@ -243,9 +255,9 @@ def audit_cohort(frame: pd.DataFrame) -> CohortAudit:
         negative=negative,
         excluded_indeterminate=excluded,
         missing_labels=missing_labels,
-        unique_patients=int(pd.Series(composite).nunique()),
-        duplicate_patient_id_rows=duplicate_patient_rows,
-        unique_sessions=int(len(set(sessions))),
+        unique_patients=unique_patients,
+        duplicate_patient_id_rows=duplicate_patient_id_rows,
+        unique_sessions=unique_sessions,
         duplicate_session_rows=duplicate_session_rows,
         missing_site_ids=missing_site_ids,
         missing_patient_ids=missing_patient_ids,

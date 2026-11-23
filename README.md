@@ -16,7 +16,7 @@
 
 | Category | Status |
 |---|---|
-| **Implemented software** | Full package: metadata audit & join, EDF chunk reader, quality checks, preprocessing, 6 modality feature extractors, 6 baselines, site-held-out evaluation, patient-cluster bootstrap, benchmark evaluator |
+| **Implemented software** | Full package: metadata audit & join, EDF chunk reader, quality checks, preprocessing, **7 modality feature extractors**, explicit unit harmonization, 6 baselines using all signal families, site-held-out evaluation, patient-cluster bootstrap, benchmark evaluator |
 | **Tested on synthetic fixtures** | Yes — all automated tests use synthetic metadata/EDFs (including a full end-to-end join and chunk-read tests) |
 | **Tested on real data** | **No** — no Kaggle credentials/BDSP terms acceptance; no labelled CSV or EDF downloaded |
 | **Model training actually completed** | Only on synthetic software-test fixtures; no real patient-data model was fitted |
@@ -85,10 +85,12 @@ verified channels:
 - **SpO2** — mean/median/min/std saturation and fraction below 90% (descriptive
   oximetry summaries, not event-based apnea/hypopnea scoring).
 
-Every channel with a verified mapping contributes: channel-specific features use
-stable `<modality>_ch_<channel>_` prefixes, and unprefixed features are the mean
-across channels. Missing modalities are explicit `missing_<modality>` indicators;
-no physiological value is fabricated.
+These are **seven modality extractors** in total. Every channel with a verified
+mapping contributes: channel-specific features use stable
+`<modality>_ch_<channel>_` prefixes, and unprefixed features are the mean across
+channels. Missing modalities are explicit `missing_<modality>` indicators; no
+physiological value is fabricated. Airflow and SpO2 are first-class modality
+families and are included in model feature selection (see section 7).
 
 ## 6. Full-night signal processing
 
@@ -109,11 +111,38 @@ Preprocessing primitives (detrending, baseline correction, Butterworth SOS
 band-pass with documented padding, IIR notch, polyphase anti-aliased resampling)
 are in `preprocessing.py`.
 
+### 6.1 Signal-unit harmonization (`units.py`)
+
+EDF physical dimensions are read from headers and converted using explicit,
+tested rules before feature computation:
+
+| Modality | Canonical unit | Rule |
+|---|---|---|
+| EEG / EOG / EMG | **uV** | V → 1e6, mV → 1e3, uV → 1, nV → 1e-3 |
+| ECG | **mV** | V → 1e3, uV → 1e-3, nV → 1e-6, mV → 1 |
+| SpO2 | **%** | fraction/ratio units ×100 **only** when the EDF physical range or values confirm 0..1; otherwise flagged and left untouched |
+| RESP / AIRFLOW | source-specific | **no conversion invented**; only unit-invariant features (rate, amplitude CV, regularity) are interpreted |
+
+`resp_signal_range` is unit-dependent and must not be compared across sites with
+different sensor units. Unrecognized or incompatible units are flagged
+(`unit_*_unknown`) rather than silently treated as equivalent. Original units,
+canonical units, scale factors and statuses are preserved in `unit_*` columns of
+the feature table and in `RecordingAudit.unit_handling`; these are **provenance
+metadata, not predictors** and are excluded from model feature matrices.
+
+> Unit equivalence has been verified on synthetic signals expressed in V, mV and
+> uV. **Real EDF unit harmonization has not been validated** because no real
+> recordings were processed. Unit differences remain a cross-site limitation.
+
 ## 7. Machine-learning baselines
 
 Six scikit-learn pipelines with fold-local imputation/scaling: `dummy`,
 `demo_lr`, `signal_lr`, `signal_rf`, `combined_lr`, `combined_hgb`. Unknown or
 missing sex values remain NaN until the training-fold imputer handles them.
+After the modality-selection fix, **all supported signal feature families**
+(`eeg_`, `ecg_`, `resp_`, `airflow_`, `emg_`, `eog_`, `spo2_` and `missing_`
+indicators) enter the signal-only and combined matrices; identifiers, recording
+names, labels and unit-provenance columns never do.
 
 ## 8. Patient/site validation and metrics
 

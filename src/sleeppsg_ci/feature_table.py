@@ -24,6 +24,7 @@ from .features_resp import extract_resp_features
 from .features_spo2 import extract_spo2_features
 from .preprocessing import epoch_signal
 from .signal_reader import EdfChunkReader
+from .units import resolve_unit_conversion
 
 EXTRACTORS = {
     "EEG": extract_eeg_features,
@@ -51,10 +52,15 @@ def _reprefix(features: dict[str, float], modality: str) -> dict[str, float]:
     target = _prefix_for(modality)
     if source is None or source == target:
         return features
-    return {
-        (key.replace(f"{source}_", f"{target}_", 1) if key.startswith(f"{source}_") else key): value
-        for key, value in features.items()
-    }
+    renamed: dict[str, float] = {}
+    for key, value in features.items():
+        new_key = key
+        if key.startswith(f"{source}_"):
+            new_key = key.replace(f"{source}_", f"{target}_", 1)
+        elif key.startswith(f"unit_{source}_"):
+            new_key = key.replace(f"unit_{source}_", f"unit_{target}_", 1)
+        renamed[new_key] = value
+    return renamed
 
 
 def _channel_token(channel: str) -> str:
@@ -181,6 +187,10 @@ def extract_from_edf(
         raise FileNotFoundError(f"EDF file not found: {edf_path}")
 
     by_modality: dict[str, dict[str, dict[str, float]]] = {}
+    unit_records: dict[str, str | float] = {}
+    unit_counts: dict[str, dict[str, int]] = {
+        modality: {"unknown": 0, "converted": 0} for modality in EXPECTED_MODALITIES
+    }
     with EdfChunkReader(edf_path) as reader:
         duration = reader.duration_seconds
         for channel in reader.channels():
@@ -191,6 +201,29 @@ def extract_from_edf(
             if not np.isfinite(fs) or fs <= 0:
                 continue
             prefix = _prefix_for(modality)
+            token = _channel_token(channel)
+            original_unit = reader.units(channel)
+            low, high = reader.physical_limits(channel)
+
+            # Resolve once for provenance; the extractor resolves the same rule
+            # (using header limits for SpO2 fractions) before feature computation.
+            handling = resolve_unit_conversion(
+                modality, original_unit, physical_min=low, physical_max=high
+            )
+            unit_records.update({
+                f"unit_original_{prefix}_{token}": original_unit or "<blank>",
+                f"unit_canonical_{prefix}_{token}": handling.canonical_unit,
+                f"unit_status_{prefix}_{token}": handling.status,
+                f"unit_scale_{prefix}_{token}": float(handling.scale_factor),
+            })
+            if handling.status in {"unknown", "flagged"}:
+                unit_counts[modality]["unknown"] += 1
+            if handling.status == "converted":
+                unit_counts[modality]["converted"] += 1
+
+            kwargs: dict = {"unit": original_unit}
+            if modality == "SPO2":
+                kwargs["physical_limits"] = (low, high)
             epochs, info = reader.iter_epochs(channel, chunk_seconds, epoch_seconds)
             if info.n_epochs == 0:
                 # Whole (short) channel through the partial-read API.
@@ -198,7 +231,7 @@ def extract_from_edf(
                 epochs = iter([samples])
             rows: list[dict[str, float]] = []
             for epoch in epochs:
-                features = _reprefix(EXTRACTORS[modality](epoch, info.fs), modality)
+                features = _reprefix(EXTRACTORS[modality](epoch, info.fs, **kwargs), modality)
                 if features.get(f"{prefix}_features_valid", 0.0) == 1.0:
                     rows.append(features)
             n_excluded = int(info.n_epochs - len(rows))
@@ -207,13 +240,16 @@ def extract_from_edf(
             night = _summarize_epochs(rows, prefix, info.n_epochs, n_excluded)
             by_modality.setdefault(modality, {})[channel] = night
 
-    features: dict[str, float] = {}
+    features: dict[str, str | float] = {}
     for modality in EXPECTED_MODALITIES:
         features.update(_aggregate_channels(by_modality.get(modality, {}), modality))
+        features[f"unit_unknown_channels_{modality.lower()}"] = float(unit_counts[modality]["unknown"])
+        features[f"unit_converted_channels_{modality.lower()}"] = float(unit_counts[modality]["converted"])
     features["n_verified_modalities"] = float(
         sum(1 for modality in EXPECTED_MODALITIES if by_modality.get(modality))
     )
     features["signal_duration_seconds"] = float(duration)
+    features.update(unit_records)
     return features
 
 

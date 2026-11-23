@@ -14,6 +14,7 @@ import pandas as pd
 
 from .quality import aggregate_quality_reports, signal_quality_report
 from .signal_reader import EdfChunkReader
+from .units import resolve_unit_conversion
 
 VALID_MODALITIES = ("EEG", "EOG", "EMG", "ECG", "RESP", "AIRFLOW", "SPO2", "OTHER")
 
@@ -151,6 +152,7 @@ class RecordingAudit:
     available_modalities: list[str]
     missing_modalities: list[str]
     channel_quality: dict[str, dict]
+    unit_handling: dict[str, dict] = field(default_factory=dict)
     excluded_reasons: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -160,6 +162,7 @@ class RecordingAudit:
             "available_modalities": list(self.available_modalities),
             "missing_modalities": list(self.missing_modalities),
             "channel_quality": dict(self.channel_quality),
+            "unit_handling": dict(self.unit_handling),
             "excluded_reasons": list(self.excluded_reasons),
         }
 
@@ -190,6 +193,19 @@ def audit_recording(
     available = sorted({value for value in modality.values() if value != "UNVERIFIED"})
     missing = sorted(set(expected_modalities) - set(available))
 
+    # Record unit provenance for every verified physiological channel. Original
+    # EDF dimensions stay in header.units; this is the resolved conversion plan.
+    unit_handling: dict[str, dict] = {}
+    convertible = set(expected_modalities)
+    for channel, resolved in modality.items():
+        if resolved not in convertible:
+            continue
+        low, high = header.physical_limits.get(channel, (None, None))
+        handling = resolve_unit_conversion(
+            resolved, header.units.get(channel, ""), physical_min=low, physical_max=high
+        )
+        unit_handling[channel] = handling.to_dict()
+
     quality: dict[str, dict] = {}
     reasons: list[str] = []
     if inspect_samples:
@@ -213,6 +229,7 @@ def audit_recording(
         available_modalities=available,
         missing_modalities=missing,
         channel_quality=quality,
+        unit_handling=unit_handling,
         excluded_reasons=sorted(set(reasons)),
     )
 

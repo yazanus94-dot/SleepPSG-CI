@@ -85,7 +85,23 @@ class EdfChunkReader:
         return (float(low) if low is not None else None, float(high) if high is not None else None)
 
     def units(self, label: str) -> str:
+        """Raw EDF physical dimension, preserved exactly as recorded."""
         return str(getattr(self._signal(label), "physical_dimension", "")).strip()
+
+    def channel_units(self) -> dict[str, str]:
+        """Header-only map of channel label -> original physical dimension."""
+        return {label: self.units(label) for label in self.channels()}
+
+    def channel_metadata(self, label: str) -> dict:
+        """Header-only unit/rate metadata used for unit harmonization."""
+        low, high = self.physical_limits(label)
+        return {
+            "label": label,
+            "original_unit": self.units(label),
+            "sampling_frequency": self.sampling_rate(label),
+            "physical_min": low,
+            "physical_max": high,
+        }
 
     def read_channel(self, label: str) -> np.ndarray:
         """Read a whole channel through the partial-read API (short files only)."""

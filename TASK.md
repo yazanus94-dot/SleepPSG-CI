@@ -25,8 +25,9 @@ where a key is required. A bare patient ID may repeat across sites.
 ## Permitted inputs
 
 - Baseline demographics: `Age`, `Sex`, `BMI` (unknown sex stays NaN until imputation).
-- Physiological features from verified channels: EEG, ECG, RESP, AIRFLOW, EMG,
-  EOG and SpO2 (descriptive saturation summaries only).
+- Physiological features from verified channels: all **seven** modality
+  families — EEG, ECG, RESP, AIRFLOW, EMG, EOG and SpO2 (descriptive saturation
+  summaries only). Signal-only and combined baselines use every family.
 - Explicit `missing_<modality>` indicators.
 
 ## Forbidden inputs
@@ -50,6 +51,14 @@ Full available recording is processed with bounded partial EDF reads
 (`get_data_slice`); 30-second epochs are aggregated across chunks with documented
 robust statistics. Non-finite gaps split contiguous segments; time-dependent
 features are never computed across gaps.
+
+Explicit unit harmonization: EEG/EOG/EMG → uV, ECG → mV, SpO2 → percent (fraction
+units converted only when header/values confirm 0..1). RESP/AIRFLOW units are
+source-specific and unconverted; only unit-invariant features are interpreted
+and `resp_signal_range` must not be compared across sites. Unknown units are
+flagged, never silently equated. Original units and conversion status are kept
+as `unit_*` provenance metadata and are excluded from model predictors. No real
+EDF recordings have been processed, so cross-site unit harmonization is unvalidated.
 
 ## Validation
 

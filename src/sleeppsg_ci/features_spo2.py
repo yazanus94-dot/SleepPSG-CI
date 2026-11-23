@@ -16,9 +16,29 @@ from .quality import contiguous_finite_segments
 HYPOXEMIA_THRESHOLD = 90.0  # conventional descriptive SpO2 threshold
 
 
-def extract_spo2_features(signal_array: np.ndarray, fs: float) -> dict[str, float]:
-    """Return night-level SpO2 distribution summaries with quality flags."""
+def extract_spo2_features(
+    signal_array: np.ndarray,
+    fs: float,
+    unit: str | None = None,
+    physical_limits: tuple[float | None, float | None] | None = None,
+) -> dict[str, float]:
+    """Return night-level SpO2 summaries in canonical percent.
+
+    A fraction unit (e.g. ``1``/``ratio``) is converted to percent **only** when
+    the EDF physical range or the observed values support a 0..1 interpretation;
+    otherwise the unit is flagged and values are left untouched.
+    """
+    from .units import apply_unit_conversion, resolve_unit_conversion, unit_feature_flags
+
     array = np.asarray(signal_array, dtype=float).reshape(-1)
+    low, high = physical_limits if physical_limits is not None else (None, None)
+    handling = (
+        resolve_unit_conversion(
+            "SPO2", unit, physical_min=low, physical_max=high, sample_values=array
+        )
+        if unit is not None else None
+    )
+    array = apply_unit_conversion(array, handling)
     segments = contiguous_finite_segments(array, min_length=2)
     all_finite = np.concatenate(segments) if segments else np.array([], dtype=float)
     n_gaps = max(len(segments) - 1, 0)
@@ -29,6 +49,7 @@ def extract_spo2_features(signal_array: np.ndarray, fs: float) -> dict[str, floa
         "spo2_n_segments": float(len(segments)),
         "spo2_features_valid": 0.0,
     }
+    base.update(unit_feature_flags("spo2", handling))
     for key in ("spo2_mean", "spo2_median", "spo2_min", "spo2_std", "spo2_below_90_fraction"):
         base[key] = float("nan")
     if all_finite.size < 2 or not np.isfinite(fs) or fs <= 0:

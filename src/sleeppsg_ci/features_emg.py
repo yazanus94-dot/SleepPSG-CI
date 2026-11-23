@@ -33,12 +33,15 @@ def _segment_features(finite: np.ndarray, fs: float) -> dict[str, float]:
     return result
 
 
-def extract_emg_features(signal_array: np.ndarray, fs: float) -> dict[str, float]:
-    """Return EMG features aggregated over contiguous finite segments."""
+def extract_emg_features(signal_array: np.ndarray, fs: float, unit: str | None = None) -> dict[str, float]:
+    """Return EMG features in canonical microvolts over finite segments."""
     from .features_common import weighted_feature_mean
     from .quality import contiguous_finite_segments
+    from .units import apply_unit_conversion, resolve_unit_conversion, unit_feature_flags
 
     array = np.asarray(signal_array, dtype=float).reshape(-1)
+    handling = resolve_unit_conversion("EMG", unit) if unit is not None else None
+    array = apply_unit_conversion(array, handling)
     segments = contiguous_finite_segments(array, min_length=16)
     n_finite = int(np.count_nonzero(np.isfinite(array)))
     base: dict[str, float] = {
@@ -48,6 +51,7 @@ def extract_emg_features(signal_array: np.ndarray, fs: float) -> dict[str, float
         "emg_n_segments": float(len(segments)),
         "emg_features_valid": 0.0,
     }
+    base.update(unit_feature_flags("emg", handling))
     for key in ("emg_rms", "emg_mean_abs", "emg_peak_to_peak", "emg_activity_fraction",
                 "emg_high_freq_power", "emg_total_power", "emg_spectral_centroid"):
         base[key] = float("nan")

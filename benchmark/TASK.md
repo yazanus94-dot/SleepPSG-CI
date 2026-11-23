@@ -21,9 +21,19 @@ A training CSV (with `Cognitive_Impairment`) and an evaluation CSV (without it),
 each keyed by `SiteID` and `BDSPPatientID`, carrying `Age`, optional `BMI`/
 `Sex_male`, and permitted physiological feature columns:
 
-`eeg_*`, `ecg_*`, `resp_*`, `airflow_*`, `emg_*`, `eog_*`, `spo2_*`,
-`missing_*`, `n_channels_*`, `signal_*`, `n_verified*`, plus `Age`, `BMI`,
-`Sex_male`. Identifiers are supplied separately for alignment only.
+All **seven** modality families are permitted and are used by the reference
+model: `eeg_*`, `ecg_*`, `resp_*`, `airflow_*`, `emg_*`, `eog_*`, `spo2_*`, plus
+`missing_*`, `n_channels_*`, `signal_*`, `n_verified*`, `Age`, `BMI`, `Sex_male`.
+Identifiers are supplied separately for alignment only. `unit_*` columns describe
+signal-unit provenance and are **not** predictors.
+
+Signal units are harmonized before feature extraction using explicit rules:
+EEG/EOG/EMG → uV, ECG → mV, SpO2 → percent (fraction→percent only when header or
+values confirm 0..1). Respiratory effort and airflow units are source-specific
+and unconverted; only unit-invariant features should be interpreted and
+`resp_signal_range` must not be compared across sites. Unknown units are flagged,
+not silently equated. No real EDF recordings have been processed, so real-data
+unit harmonization is unvalidated.
 
 ## Output contract
 

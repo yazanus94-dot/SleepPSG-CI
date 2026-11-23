@@ -18,7 +18,12 @@ from .cohort import FORBIDDEN_PREDICTORS
 
 RANDOM_SEED = 42
 DEMOGRAPHIC_FEATURES = ("Age", "BMI", "Sex_male")
-SIGNAL_PREFIXES = ("eeg_", "ecg_", "resp_", "emg_", "eog_", "missing_")
+# All seven extracted modality families plus explicit missingness indicators.
+# AIRFLOW and SPO2 produce features in feature_table.py and must be visible to
+# signal-only and combined baselines as well.
+SIGNAL_PREFIXES = (
+    "eeg_", "ecg_", "resp_", "airflow_", "emg_", "eog_", "spo2_", "missing_",
+)
 
 
 class LeakageError(ValueError):

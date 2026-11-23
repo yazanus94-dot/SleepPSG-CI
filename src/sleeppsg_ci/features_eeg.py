@@ -95,12 +95,19 @@ def _spectral_features(finite: np.ndarray, fs: float) -> dict[str, float]:
     return features
 
 
-def extract_eeg_features(signal_array: np.ndarray, fs: float) -> dict[str, float]:
-    """Return EEG spectral features, aggregating contiguous finite segments."""
+def extract_eeg_features(signal_array: np.ndarray, fs: float, unit: str | None = None) -> dict[str, float]:
+    """Return EEG spectral features in canonical microvolts.
+
+    ``unit`` is the EDF physical dimension; when supplied it is converted to the
+    canonical unit before any spectral estimation. Unknown units are flagged.
+    """
     from .features_common import weighted_feature_mean
     from .quality import contiguous_finite_segments
+    from .units import apply_unit_conversion, resolve_unit_conversion, unit_feature_flags
 
     array = np.asarray(signal_array, dtype=float).reshape(-1)
+    handling = resolve_unit_conversion("EEG", unit) if unit is not None else None
+    array = apply_unit_conversion(array, handling)
     segments = contiguous_finite_segments(array, min_length=16)
     n_finite = int(np.count_nonzero(np.isfinite(array)))
     features: dict[str, float] = {
@@ -110,6 +117,7 @@ def extract_eeg_features(signal_array: np.ndarray, fs: float) -> dict[str, float
         "eeg_n_segments": float(len(segments)),
         "eeg_features_valid": 0.0,
     }
+    features.update(unit_feature_flags("eeg", handling))
     if n_finite < 16 or not np.isfinite(fs) or fs <= 0:
         features.update(_nan_features())
         return features
