@@ -83,18 +83,19 @@ training or clinical performance measurement occurred in this sprint**.
 - No credentials were configured, no terms accepted, no network data downloaded
   and no EDF touched during implementation or testing.
 
-### This sprint (Kaggle CLI compatibility)
+### Prior sprint (Kaggle CLI compatibility)
 
 - Inspected the official Kaggle CLI documentation
   (`Kaggle/kaggle-api/docs/README.md`, authentication section), configuration
   docs and CLI/SDK source (`kaggle_api_extended.py`, `kagglesdk/kaggle_env.py`,
   `kagglesdk/kaggle_creds.py`) on 2026-11-23.
-- `credential_source()` now recognizes, in CLI order: `KAGGLE_API_TOKEN` (value
-  or path to a token file), `~/.kaggle/access_token` (and `.txt`), OAuth
+- `credential_source()` now recognizes `KAGGLE_API_TOKEN` (value or path to a
+  token file), `~/.kaggle/access_token` (and `.txt`), OAuth
   `~/.kaggle/credentials.json` (created by a user-run `kaggle auth login`),
   `KAGGLE_USERNAME` + `KAGGLE_KEY`, `~/.kaggle/kaggle.json`, a custom
   `KAGGLE_CONFIG_DIR/kaggle.json` and the Linux XDG fallback. Only source labels
-  and booleans are reported; no value is printed, logged or stored.
+  and booleans are reported; no value is printed, logged or stored. The exact
+  ordering was corrected in the following sprint (see below).
 - README now distinguishes the current **Generate New Token** API-token workflow
   from the legacy **Create Legacy API Key** `kaggle.json` workflow, documents
   OAuth as manual-only, and states that the current CLI requires Python 3.11+
@@ -104,6 +105,27 @@ training or clinical performance measurement occurred in this sprint**.
   allowlist, remote size check, 500 MiB cap, post-download size verification)
   remain in force and covered by tests.
 - No authentication, login, terms acceptance or download was performed.
+
+### This sprint (credential precedence and XDG correctness)
+
+- Re-verified the authoritative source: `KaggleApi.authenticate` orders methods
+  as **active API token → legacy API key → OAuth credentials** (anonymous
+  fallback last). `credential_source()` now follows that order and reports the
+  source the CLI would actually prefer; the docstring and README were corrected.
+- Config-directory precedence now matches the CLI source: `KAGGLE_CONFIG_DIR`
+  first; otherwise `~/.kaggle` **if that directory exists**; otherwise on Linux
+  `$XDG_CONFIG_HOME/kaggle`, or the default `~/.config/kaggle` when
+  `XDG_CONFIG_HOME` is unset. We no longer select XDG credentials when the CLI
+  would use a custom config dir or an existing `~/.kaggle`.
+- `access_token.txt` was verified in the official `kagglesdk/kaggle_env.py`
+  source (a Windows convenience extension) and deliberately retained. The CLI
+  itself is not installed locally, so this is a source verification, not a
+  locally installed CLI verification.
+- Added 7 mocked tests for explicit/default XDG paths, XDG suppression by
+  `~/.kaggle`/`KAGGLE_CONFIG_DIR`/non-Linux platforms and multi-source
+  precedence. All downloads safeguards remain unchanged.
+- No credentials, authentication, terms acceptance, dataset download or EDF
+  processing occurred.
 
 ## Files inspected
 
@@ -163,14 +185,15 @@ The full command list is in README section 3.1.
 
 ## Test results
 
-- `python -m pytest` → **176 passed, 0 failed, 0 skipped** (synthetic/mocked
+- `python -m pytest` → **183 passed, 0 failed, 0 skipped** (synthetic/mocked
   fixtures only; includes synthetic EDFs, end-to-end join + CLI, chunk-read/no-
   `.data` test, gap tests, official-scorer differential tests, bootstrap cluster
   test, airflow/SpO2 feature-selection tests, incomplete-identity counting tests,
   V/mV/uV unit equivalence tests, unit-aware feature-eligibility tests,
   duplicate-label and epoch-cap regressions, experiment source/provenance tests,
-  and 32 mocked data-access tests covering all supported credentials, invalid
-  configs, no-leakage assertions, size checks and download confirmation).
+  and 39 mocked data-access tests covering all supported credentials, XDG paths,
+  precedence, invalid configs, no-leakage assertions, size checks and download
+  confirmation).
 - `ruff check .` → **All checks passed!**
 - CLI smoke tests for all scripts passed on synthetic data; site-held-out
   evaluation produced 3 folds × 6 models with integrated patient bootstrap CIs.

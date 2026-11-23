@@ -131,7 +131,83 @@ def test_xdg_config_dir_legacy_json(tmp_path):
     xdg = tmp_path / "xdg"
     write_json(xdg / "kaggle" / "kaggle.json", {"username": "user", "key": SECRET})
     env = {"XDG_CONFIG_HOME": str(xdg)}
-    assert credential_source(environ=env, home=tmp_path / "empty") == CREDENTIAL_SOURCE_XDG
+    assert credential_source(
+        environ=env, home=tmp_path / "empty", platform_name="linux"
+    ) == CREDENTIAL_SOURCE_XDG
+
+
+def test_default_xdg_fallback_legacy_json(tmp_path):
+    """Without XDG_CONFIG_HOME the CLI uses ~/.config/kaggle on Linux."""
+    home = tmp_path / "home"
+    write_json(home / ".config" / "kaggle" / "kaggle.json",
+               {"username": "user", "key": SECRET})
+    assert credential_source(
+        environ={}, home=home, platform_name="linux"
+    ) == CREDENTIAL_SOURCE_XDG
+
+
+def test_xdg_ignored_when_home_kaggle_dir_exists(tmp_path):
+    """CLI uses an existing ~/.kaggle even without a valid kaggle.json."""
+    home = tmp_path / "home"
+    (home / ".kaggle").mkdir(parents=True)  # exists but empty
+    xdg = tmp_path / "xdg"
+    write_json(xdg / "kaggle" / "kaggle.json", {"username": "user", "key": SECRET})
+    assert credential_source(
+        environ={"XDG_CONFIG_HOME": str(xdg)}, home=home, platform_name="linux"
+    ) == CREDENTIAL_SOURCE_NONE
+
+
+def test_xdg_ignored_when_custom_config_dir_set(tmp_path):
+    home = tmp_path / "empty"
+    custom = tmp_path / "custom"
+    custom.mkdir()
+    xdg = tmp_path / "xdg"
+    write_json(xdg / "kaggle" / "kaggle.json", {"username": "user", "key": SECRET})
+    env = {"KAGGLE_CONFIG_DIR": str(custom), "XDG_CONFIG_HOME": str(xdg)}
+    assert credential_source(
+        environ=env, home=home, platform_name="linux"
+    ) == CREDENTIAL_SOURCE_NONE
+
+
+def test_xdg_ignored_on_non_linux_platforms(tmp_path):
+    xdg = tmp_path / "xdg"
+    write_json(xdg / "kaggle" / "kaggle.json", {"username": "user", "key": SECRET})
+    env = {"XDG_CONFIG_HOME": str(xdg)}
+    assert credential_source(
+        environ=env, home=tmp_path / "empty", platform_name="win32"
+    ) == CREDENTIAL_SOURCE_NONE
+
+
+def test_precedence_token_beats_legacy_and_oauth(tmp_path):
+    home = tmp_path / "home"
+    (home / ".kaggle").mkdir(parents=True)
+    (home / ".kaggle" / "access_token").write_text(SECRET, encoding="utf-8")
+    write_json(home / ".kaggle" / "kaggle.json", {"username": "user", "key": "legacy"})
+    write_json(home / ".kaggle" / "credentials.json", {"refresh_token": "oauth"})
+    env = {"KAGGLE_USERNAME": "user", "KAGGLE_KEY": "legacy"}
+    assert credential_source(environ=env, home=home) == CREDENTIAL_SOURCE_ACCESS_TOKEN_FILE
+    env["KAGGLE_API_TOKEN"] = "token"
+    assert credential_source(environ=env, home=home) == CREDENTIAL_SOURCE_API_TOKEN_ENV
+
+
+def test_precedence_legacy_beats_oauth(tmp_path):
+    home = tmp_path / "home"
+    write_json(home / ".kaggle" / "kaggle.json", {"username": "user", "key": "legacy"})
+    write_json(home / ".kaggle" / "credentials.json", {"refresh_token": "oauth"})
+    assert credential_source(environ={}, home=home) == CREDENTIAL_SOURCE_HOME
+    env = {"KAGGLE_USERNAME": "user", "KAGGLE_KEY": "legacy"}
+    assert credential_source(environ=env, home=home) == CREDENTIAL_SOURCE_ENV
+
+
+def test_precedence_custom_config_dir_beats_home_json_and_xdg(tmp_path):
+    home = tmp_path / "home"
+    write_json(home / ".kaggle" / "kaggle.json", {"username": "home", "key": "home-key"})
+    custom = tmp_path / "custom"
+    write_json(custom / "kaggle.json", {"username": "custom", "key": "custom-key"})
+    xdg = tmp_path / "xdg"
+    write_json(xdg / "kaggle" / "kaggle.json", {"username": "xdg", "key": "xdg-key"})
+    env = {"KAGGLE_CONFIG_DIR": str(custom), "XDG_CONFIG_HOME": str(xdg)}
+    assert credential_source(environ=env, home=home) == CREDENTIAL_SOURCE_CONFIG_DIR
 
 
 def test_missing_credentials(tmp_path):

@@ -81,19 +81,26 @@ Verified against the official Kaggle CLI documentation
 on 2026-11-23. Detection reports only the **source label** and a presence
 boolean — never a token, key or file value.
 
-| Method | Where the user configures it | Our source label |
-|---|---|---|
-| **API token (current)** — "Generate New Token" at https://www.kaggle.com/settings/api | `KAGGLE_API_TOKEN` env (value, or a path to a token file) | `kaggle_api_token_env` |
-| **API token file (current)** | `~/.kaggle/access_token` (or `access_token.txt`) | `access_token_file` |
-| **OAuth (current)** — user runs `kaggle auth login` interactively | `~/.kaggle/credentials.json` written by the CLI | `oauth_credentials` |
-| **Legacy key pair** | `KAGGLE_USERNAME` + `KAGGLE_KEY` env | `environment` |
-| **Legacy API key file** — "Create Legacy API Key" at https://www.kaggle.com/settings/api | `~/.kaggle/kaggle.json` (`{"username", "key"}`) | `home_kaggle_json` |
-| **Legacy key in custom dir** (supported by the installed CLI) | `$KAGGLE_CONFIG_DIR/kaggle.json` | `kaggle_config_dir` |
-| **Legacy key via XDG fallback** (Linux CLI behaviour) | `$XDG_CONFIG_HOME/kaggle/kaggle.json` | `xdg_kaggle_json` |
+Official authentication order (`KaggleApi.authenticate`): **active API token →
+legacy API key → OAuth credentials**. Config-directory selection for
+`kaggle.json` is `KAGGLE_CONFIG_DIR` first, then `~/.kaggle` if that directory
+already exists, otherwise (on Linux) `$XDG_CONFIG_HOME/kaggle` or the default
+`~/.config/kaggle`. We never fall back to another config directory once the CLI
+would have selected one.
+
+| Priority | Method | Where the user configures it | Our source label |
+|---|---|---|---|
+| 1 | **API token (current)** — "Generate New Token" at https://www.kaggle.com/settings/api | `KAGGLE_API_TOKEN` env (value, or a path to a token file) | `kaggle_api_token_env` |
+| 1 | **API token file (current)** | `~/.kaggle/access_token` (official SDK also accepts `access_token.txt`) | `access_token_file` |
+| 2 | **Legacy key pair** | `KAGGLE_USERNAME` + `KAGGLE_KEY` env | `environment` |
+| 2 | **Legacy API key file** — "Create Legacy API Key" at https://www.kaggle.com/settings/api | selected config dir `/kaggle.json` (see rules above) | `kaggle_config_dir` / `home_kaggle_json` / `xdg_kaggle_json` |
+| 3 | **OAuth (current)** — user runs `kaggle auth login` interactively | `~/.kaggle/credentials.json` written by the CLI | `oauth_credentials` |
 
 Do not confuse the current **Generate New Token** API-token workflow with the
 **legacy Create Legacy API Key** `kaggle.json` workflow. We never run
-`kaggle auth login` or accept terms automatically.
+`kaggle auth login` or accept terms automatically. `access_token.txt` support
+was verified in the official `kagglesdk/kaggle_env.py` source (Windows
+convenience extension), not in a locally installed CLI.
 
 #### CLI installation requirement
 
@@ -316,10 +323,10 @@ CI runs without Kaggle credentials or PhysioNet downloads. Evidence categories
 are kept strictly separate:
 
 - **Implemented software:** the full pipeline (see status table).
-- **Synthetic test results:** 176 automated tests (32 mocked data-access tests
-  covering all supported credentials, size verification and confirmation gating)
-  exercise algorithm behavior without real downloads; these are software checks,
-  never clinical performance.
+- **Synthetic test results:** 183 automated tests (39 mocked data-access tests
+  covering all supported credentials, XDG fallback paths, precedence, size
+  verification and confirmation gating) exercise algorithm behavior without real
+  downloads; these are software checks, never clinical performance.
 - **Real metadata audit results:** none — `demographics.csv` was not retrieved.
 - **Real EDF processing results:** none — no recording was downloaded or read.
 - **Actual model-performance results:** none — no real patient-data model was fitted.

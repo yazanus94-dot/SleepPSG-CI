@@ -1,9 +1,8 @@
 """Dataset access safeguards and the 2026 training-data access audit.
 
 No credentials, tokens or secrets are ever printed, logged or stored. The audit
-records only *whether* credentials are present and *where* they were found
-(environment, ``~/.kaggle/kaggle.json`` or ``KAGGLE_CONFIG_DIR/kaggle.json``),
-never their values.
+records only *whether* credentials are present and a source label, never values.
+Detection mirrors the current official Kaggle CLI precedence.
 """
 
 from __future__ import annotations
@@ -12,6 +11,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import urllib.parse
 import urllib.request
 from collections.abc import Mapping, Sequence
@@ -52,13 +52,16 @@ CREDENTIAL_SOURCE_XDG = "xdg_kaggle_json"
 # https://github.com/Kaggle/kaggle-api/blob/main/docs/README.md#authentication
 # and src/kaggle/api/kaggle_api_extended.py + kagglesdk/kaggle_env.py.
 SUPPORTED_CREDENTIAL_SOURCES: tuple[str, ...] = (
+    # 1. Active API token (environment variable or token file)
     CREDENTIAL_SOURCE_API_TOKEN_ENV,
     CREDENTIAL_SOURCE_ACCESS_TOKEN_FILE,
-    CREDENTIAL_SOURCE_OAUTH,
+    # 2. Legacy API key (environment pair or the selected kaggle.json)
     CREDENTIAL_SOURCE_ENV,
     CREDENTIAL_SOURCE_CONFIG_DIR,
     CREDENTIAL_SOURCE_HOME,
     CREDENTIAL_SOURCE_XDG,
+    # 3. OAuth credentials created by a manual `kaggle auth login`
+    CREDENTIAL_SOURCE_OAUTH,
 )
 
 
@@ -128,18 +131,23 @@ def credential_source(
     *,
     environ: Mapping[str, str] | None = None,
     home: str | Path | None = None,
+    platform_name: str | None = None,
 ) -> str:
-    """Identify where usable Kaggle credentials are configured (never their values).
+    """Identify the credential source the CLI would prefer (never its values).
 
-    Detection mirrors the current official CLI order: API token (env or file),
-    access-token file, OAuth credentials, legacy username/key pair, legacy
-    ``kaggle.json`` (custom config dir, home dir, then XDG fallback).
+    Official CLI order (``KaggleApi.authenticate``): active access token, then
+    legacy API key, then OAuth credentials. Config-directory selection is:
+    ``KAGGLE_CONFIG_DIR`` if set, otherwise ``~/.kaggle`` if that directory
+    already exists, otherwise (on Linux) ``$XDG_CONFIG_HOME/kaggle`` or the
+    default ``~/.config/kaggle``. We never fall back to another config directory
+    once the CLI has selected one.
     """
     env = os.environ if environ is None else environ
     home_dir = Path.home() if home is None else Path(home)
     kaggle_dir = home_dir / ".kaggle"
+    current_platform = sys.platform if platform_name is None else platform_name
 
-    # 1. KAGGLE_API_TOKEN holds a token value, or a path to a token file.
+    # 1a. KAGGLE_API_TOKEN holds a token value, or a path to a token file.
     api_token = env.get("KAGGLE_API_TOKEN")
     if api_token and str(api_token).strip():
         candidate = Path(str(api_token).strip())
@@ -149,27 +157,33 @@ def credential_source(
         else:
             return CREDENTIAL_SOURCE_API_TOKEN_ENV
 
-    # 2. API token file written by "Generate New Token".
+    # 1b. API token file written by "Generate New Token" (SDK also accepts .txt).
     if _nonblank_file(kaggle_dir / "access_token") or _nonblank_file(kaggle_dir / "access_token.txt"):
         return CREDENTIAL_SOURCE_ACCESS_TOKEN_FILE
 
-    # 3. OAuth credentials created by `kaggle auth login` (never run by us).
-    if _valid_oauth_credentials(kaggle_dir / "credentials.json"):
-        return CREDENTIAL_SOURCE_OAUTH
-
-    # 4. Legacy username/key pair.
+    # 2a. Legacy username/key environment pair.
     if env.get("KAGGLE_USERNAME") and env.get("KAGGLE_KEY"):
         return CREDENTIAL_SOURCE_ENV
 
-    # 5. Legacy kaggle.json file locations.
-    custom_dir = env.get("KAGGLE_CONFIG_DIR")
-    if custom_dir and _valid_kaggle_json(Path(custom_dir) / "kaggle.json"):
-        return CREDENTIAL_SOURCE_CONFIG_DIR
-    if _valid_kaggle_json(kaggle_dir / "kaggle.json"):
-        return CREDENTIAL_SOURCE_HOME
-    xdg_home = env.get("XDG_CONFIG_HOME")
-    if xdg_home and _valid_kaggle_json(Path(xdg_home) / "kaggle" / "kaggle.json"):
-        return CREDENTIAL_SOURCE_XDG
+    # 2b. Legacy kaggle.json in the config directory the CLI would actually use.
+    config_dir_value = env.get("KAGGLE_CONFIG_DIR")
+    if config_dir_value:
+        if _valid_kaggle_json(Path(config_dir_value) / "kaggle.json"):
+            return CREDENTIAL_SOURCE_CONFIG_DIR
+        # The CLI uses this directory even when the file is absent/invalid.
+        # Do not fall back to ~/.kaggle or XDG credentials in that case.
+    elif kaggle_dir.exists():
+        if _valid_kaggle_json(kaggle_dir / "kaggle.json"):
+            return CREDENTIAL_SOURCE_HOME
+        # ~/.kaggle exists, so the CLI does not consider an XDG directory.
+    elif current_platform.startswith("linux"):
+        xdg_home = env.get("XDG_CONFIG_HOME") or str(home_dir / ".config")
+        if _valid_kaggle_json(Path(xdg_home) / "kaggle" / "kaggle.json"):
+            return CREDENTIAL_SOURCE_XDG
+
+    # 3. OAuth credentials from a user-run `kaggle auth login` (never run by us).
+    if _valid_oauth_credentials(kaggle_dir / "credentials.json"):
+        return CREDENTIAL_SOURCE_OAUTH
     return CREDENTIAL_SOURCE_NONE
 
 
@@ -177,9 +191,12 @@ def kaggle_credentials_present(
     *,
     environ: Mapping[str, str] | None = None,
     home: str | Path | None = None,
+    platform_name: str | None = None,
 ) -> bool:
-    """Return True if credentials exist in env, kaggle.json or KAGGLE_CONFIG_DIR."""
-    return credential_source(environ=environ, home=home) != CREDENTIAL_SOURCE_NONE
+    """Return True if any credential supported by the current CLI is present."""
+    return credential_source(
+        environ=environ, home=home, platform_name=platform_name
+    ) != CREDENTIAL_SOURCE_NONE
 
 
 def kaggle_cli_available() -> bool:
@@ -192,15 +209,16 @@ def audit_access(
     *,
     environ: Mapping[str, str] | None = None,
     home: str | Path | None = None,
+    platform_name: str | None = None,
 ) -> AccessAudit:
     """Summarize dataset-access status without downloading or exposing secrets."""
-    source = credential_source(environ=environ, home=home)
+    source = credential_source(environ=environ, home=home, platform_name=platform_name)
     credentials = source != CREDENTIAL_SOURCE_NONE
     cli = kaggle_cli_available()
     if not credentials:
         blocker = (
-            "Kaggle credentials are not configured in environment variables, "
-            "~/.kaggle/kaggle.json or KAGGLE_CONFIG_DIR/kaggle.json. Selective "
+            "No Kaggle API token, access-token file, legacy username/key pair, "
+            "kaggle.json or OAuth credentials are configured. Selective "
             "retrieval of demographics.csv cannot be authenticated; no dataset "
             "content was downloaded. Configure credentials yourself and accept "
             "the BDSP data terms on your own Kaggle account before retrying."
