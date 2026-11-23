@@ -1,6 +1,6 @@
 # Audit report — SleepPSG-CI (Kaggle CLI compatibility sprint)
 
-Inspection date: **2026-11-23**. Baseline commit: `b90889b...`.
+Inspection date: **2026-11-23**. Baseline commit: `7452067...`.
 Status: software implemented and tested on synthetic/mocked fixtures; **no real
 authentication, terms acceptance, dataset download, real EDF processing, model
 training or clinical performance measurement occurred in this sprint**.
@@ -152,10 +152,15 @@ training or clinical performance measurement occurred in this sprint**.
   file previously fell through to `~/.kaggle/access_token` and
   `access_token.txt`. The official SDK helper returns the result of reading the
   existing path immediately, so an empty file yields no token and the CLI
-  continues with legacy API-key authentication. Detection now matches this:
-  an existing empty file (or a directory) consumes the token stage and skips
-  the home token files; a non-existent path remains a literal token; a directory
-  is never treated as a valid token.
+  continues with legacy API-key authentication. Detection now matches this for
+  existing files and non-existent paths (literal token).
+- **Accuracy correction in this commit:** an existing **directory** is *not*
+  claimed to mirror CLI behaviour. The SDK checks path existence and then calls
+  `read_text()`, which can raise `IsADirectoryError`. Our detector deliberately
+  rejects a directory as a credential and continues with legacy detection; it
+  skips the home token files but this is an intentional safety deviation, not
+  exact CLI behaviour. Comments and documentation were corrected accordingly;
+  runtime behaviour is unchanged.
 - Added 4 mocked regression tests (valid token file, empty-path with a valid
   home token file, empty-path with legacy credentials, non-existent literal
   path and directory path). No credential values are printed or logged.

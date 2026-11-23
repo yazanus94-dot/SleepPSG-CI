@@ -91,7 +91,7 @@ would have selected one.
 
 | Priority | Method | Where the user configures it | Our source label |
 |---|---|---|---|
-| 1 | **API token (current)** — "Generate New Token" at https://www.kaggle.com/settings/api | `KAGGLE_API_TOKEN` env (literal token, or a path to a token file; an existing empty file/directory consumes the token stage and continues to legacy) | `kaggle_api_token_env` |
+| 1 | **API token (current)** — "Generate New Token" at https://www.kaggle.com/settings/api | `KAGGLE_API_TOKEN` env (literal token or token-file path; an existing empty file yields no token and legacy auth follows; a non-existent path stays literal) | `kaggle_api_token_env` |
 | 1 | **API token file (current)** | `~/.kaggle/access_token` (CLI-documented) | `access_token_file` |
 | 1 | **API token compatibility file** | `~/.kaggle/access_token.txt` — supported because the CLI's own `_authenticate_with_access_token()` calls the SDK helper that reads this name; not listed in CLI docs | `access_token_file` |
 | 2 | **Legacy key pair** | `KAGGLE_USERNAME` + `KAGGLE_KEY` env | `environment` |
@@ -110,6 +110,13 @@ Do not confuse the current **Generate New Token** API-token workflow with the
 extension). This is CLI behaviour through its own call path, not an assumption
 from SDK code alone. Only these two exact file names are detected; other
 extensions are rejected by tests.
+
+`KAGGLE_API_TOKEN` path semantics: an existing empty file yields no token and
+legacy authentication follows, matching the SDK; a non-existent path is treated
+as a literal token. An existing **directory** is deliberately rejected by our
+detector rather than mirrored — the SDK would call `read_text()` on it and can
+raise `IsADirectoryError`. Our detector safely continues with legacy detection
+instead; this is an intentional safety deviation, not exact CLI behaviour.
 
 #### CLI installation requirement
 

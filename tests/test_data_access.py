@@ -137,6 +137,7 @@ def test_nonexistent_api_token_path_is_literal_token(tmp_path):
 
 
 def test_directory_as_api_token_path_is_not_a_credential(tmp_path):
+    """Safety deviation: SDK could raise IsADirectoryError; we reject and continue."""
     token_dir = tmp_path / "token_dir"
     token_dir.mkdir()
     home = tmp_path / "home"

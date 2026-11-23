@@ -131,12 +131,16 @@ _TOKEN_ENV_EXHAUSTED = "exhausted"
 def _api_token_env_state(value: object) -> str:
     """Classify ``KAGGLE_API_TOKEN`` without returning or logging its value.
 
-    Mirrors ``kagglesdk.get_access_token_from_env``: when the value is a path to
-    an existing path, the SDK returns the result of reading that path
-    immediately. An empty file therefore yields no token and the CLI proceeds
-    to legacy authentication without checking the home access-token files.
-    A non-existent path is treated as a literal token value. An existing
-    directory is never accepted as a token.
+    For an existing file and for a non-existent path this mirrors
+    ``kagglesdk.get_access_token_from_env``: the SDK immediately returns the
+    result of reading an existing path, so an empty file yields no token and
+    the CLI continues with legacy authentication without checking the home
+    access-token files. A non-existent path is treated as a literal token.
+
+    An existing directory is a deliberate safety deviation, not an exact CLI
+    mirror: the SDK would call ``read_text()`` on it and can raise
+    ``IsADirectoryError``. We reject it as a credential and continue with legacy
+    detection instead.
     """
     raw = str(value or "").strip()
     if not raw:
@@ -182,9 +186,12 @@ def credential_source(
     default ``~/.config/kaggle``. We never fall back to another config directory
     once the CLI has selected one.
 
-    ``KAGGLE_API_TOKEN`` pointing at an *existing* path consumes the token stage:
-    an empty file (or a directory) yields no token and we continue with legacy
-    detection without checking the home token files, matching the SDK helper.
+    ``KAGGLE_API_TOKEN`` pointing at an existing empty file consumes the token
+    stage exactly as the SDK does: no token is returned and we continue with
+    legacy detection without checking the home token files. An existing
+    directory is safely rejected by our detector (the SDK could raise
+    ``IsADirectoryError``); it also continues with legacy detection, but this
+    is an intentional safety deviation rather than exact CLI behaviour.
     """
     env = os.environ if environ is None else environ
     home_dir = Path.home() if home is None else Path(home)
@@ -198,7 +205,8 @@ def credential_source(
 
     # 1b. API token files. The extensionless name is CLI-documented; the .txt
     # compatibility name is supported by the kagglesdk helper the CLI calls.
-    # An existing (empty/directory) KAGGLE_API_TOKEN path skips these entirely.
+    # An existing empty-file or rejected-directory KAGGLE_API_TOKEN path skips
+    # these entirely; an absent env token does not.
     if token_state == _TOKEN_ENV_ABSENT:
         if _nonblank_file(kaggle_dir / ACCESS_TOKEN_FILE):
             return CREDENTIAL_SOURCE_ACCESS_TOKEN_FILE
