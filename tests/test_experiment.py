@@ -84,8 +84,14 @@ def test_main_writes_provenance_and_experiment_contract(tmp_path):
     assert any("delta of 2 years" in item for item in experiment["contract"])
     assert any("Patient-cluster bootstrap" in item for item in experiment["contract"])
     assert len(results["per_fold"]) == 3
-    assert all(fold["models"]["dummy"]["auroc_age_ci"]["resampling_unit"] == "composite_patient"
-               for fold in results["per_fold"])
+    assert results["per_fold"]
+    for fold in results["per_fold"]:
+        dummy = fold["models"]["dummy"]
+        if dummy["scoreable"]:
+            assert dummy["auroc_age_ci"]["resampling_unit"] == "composite_patient"
+        else:
+            assert "auroc_age_ci" not in dummy
+            assert np.isnan(dummy["auroc_age"])
 
     saved = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert saved["experiment"] == experiment

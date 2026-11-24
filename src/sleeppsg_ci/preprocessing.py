@@ -57,7 +57,10 @@ def bandpass_filter(
     if order < 1:
         raise ValueError("Filter order must be >= 1.")
     sos = signal.butter(order, [low_hz, high_hz], btype="bandpass", fs=rate, output="sos")
-    padlen = 3 * (2 * sos.shape[0])
+    # SciPy's sosfiltfilt default is 3 * (2 * n_sections + 1) for these
+    # Butterworth bandpass designs; the old 3 * 2 * n_sections guard allowed
+    # short signals that SciPy then rejected.
+    padlen = 3 * (2 * sos.shape[0] + 1)
     if array.size <= padlen:
         raise ValueError(
             f"Signal too short for zero-phase filtering: {array.size} samples, need > {padlen}."

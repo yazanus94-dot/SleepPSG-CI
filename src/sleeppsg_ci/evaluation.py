@@ -10,7 +10,15 @@ import pandas as pd
 from .cohort import normalize_label
 from .identity import add_patient_key
 from .metrics import bootstrap_ci, compute_auroc_age, score_predictions
-from .modeling import build_baselines, feature_kind_for, fit_predict, model_config_hash, select_feature_matrix
+from .modeling import (
+    SIGNAL_PREFIXES,
+    build_baselines,
+    eligible_signal_columns,
+    feature_kind_for,
+    fit_predict,
+    model_config_hash,
+    select_feature_matrix,
+)
 from .site_splits import assert_patient_frames_disjoint, fold_summary, leave_one_site_out
 
 REQUIRED_EVAL_COLUMNS = ("SiteID", "BDSPPatientID", "Age", "Cognitive_Impairment")
@@ -47,6 +55,14 @@ def evaluate_site_held_out(
     on the composite ``SiteID_BDSPPatientID`` identity.
     """
     labelled = prepare_labelled(frame)
+    # Freeze the unit-eligible signal schema once on the full cohort. Site-level
+    # unit provenance can differ; recomputing it per fold breaks train/test
+    # matrix alignment and turns a valid fold into an opaque model error.
+    signal_candidates = [
+        column for column in labelled.columns
+        if column.startswith(SIGNAL_PREFIXES)
+    ]
+    signal_columns = eligible_signal_columns(labelled, signal_candidates)
     sites = labelled["SiteID"].astype(str)
     folds = leave_one_site_out(list(sites))
     results: dict = {
@@ -100,8 +116,8 @@ def evaluate_site_held_out(
 
         for name in model_names:
             kind = feature_kind_for(name)
-            x_train = select_feature_matrix(train_df, kind)
-            x_test = select_feature_matrix(test_df, kind)
+            x_train = select_feature_matrix(train_df, kind, signal_columns)
+            x_test = select_feature_matrix(test_df, kind, signal_columns)
             model = build_baselines(seed)[name]
             try:
                 probabilities = fit_predict(model, x_train, y_train, x_test)

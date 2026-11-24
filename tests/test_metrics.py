@@ -15,6 +15,13 @@ from sleeppsg_ci.metrics import (
 )
 
 
+def test_scoreable_requires_defined_primary_metric():
+    """Two classes alone do not make an age-gap AUROC scoreable."""
+    result = score_predictions([1, 0], [0.9, 0.1], [40, 80])
+    assert np.isnan(result["auroc_age"])
+    assert result["scoreable"] is False
+
+
 def cohort():
     labels = np.array([1, 0, 1, 0, 1, 0])
     probs = np.array([0.9, 0.1, 0.8, 0.2, 0.7, 0.4])

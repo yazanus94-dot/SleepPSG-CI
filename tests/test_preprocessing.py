@@ -14,6 +14,13 @@ from sleeppsg_ci.preprocessing import (
 )
 
 
+def test_short_signal_raises_without_scipy_padlen_error():
+    """Signals shorter than sosfiltfilt's real padlen must fail with our message."""
+    rng = np.random.default_rng(0)
+    with pytest.raises(ValueError, match="too short"):
+        bandpass_filter(rng.normal(size=13), 256.0, 5.0, 15.0, order=2)
+
+
 def synthetic_signal(seconds=10.0, fs=256.0):
     t = np.arange(0, seconds, 1 / fs)
     return np.sin(2 * np.pi * 10 * t) + 0.5 * np.sin(2 * np.pi * 2 * t)

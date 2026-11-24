@@ -101,14 +101,25 @@ def encode_demographics(frame) -> "object":
     return output[list(DEMOGRAPHIC_FEATURES)]
 
 
-def select_feature_matrix(frame, model_kind: str) -> "object":
-    """Select an allowed, unit-eligible feature subset for a named baseline."""
+def select_feature_matrix(
+    frame, model_kind: str, allowed_signal_columns: Sequence[str] | None = None
+) -> "object":
+    """Select an allowed, unit-eligible feature subset for a named baseline.
+
+    ``allowed_signal_columns`` must be computed once on the full labelled
+    cohort. Evaluating per-partition eligibility would give train and test
+    matrices different schemas whenever unit provenance differs by site.
+    """
     demo = encode_demographics(frame)
     candidates = [
         column for column in frame.columns
         if column.startswith(SIGNAL_PREFIXES) and column not in demo.columns
     ]
-    signal_columns = eligible_signal_columns(frame, candidates)
+    signal_columns = (
+        list(allowed_signal_columns)
+        if allowed_signal_columns is not None
+        else eligible_signal_columns(frame, candidates)
+    )
     signals = frame[signal_columns].apply(pd.to_numeric, errors="coerce") if signal_columns else pd.DataFrame(index=frame.index)
     if model_kind == "none":
         # The dummy baseline uses no features; keep an explicit neutral column.

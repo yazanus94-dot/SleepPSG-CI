@@ -270,6 +270,7 @@ def score_predictions(
         raise ValueError("Binary predictions must match label length.")
 
     slope, intercept = calibration_slope_intercept(labels_arr, probs)
+    primary = compute_auroc_age(labels_arr, probs, ages_arr, gap=gap)
     prevalence_map: dict | None = None
     if prevalence_labels is not None and prevalence_ages is not None:
         prevalence_map = compute_prevalence(ages_arr, prevalence_labels, prevalence_ages, gap=gap)
@@ -278,8 +279,10 @@ def score_predictions(
         "n": int(labels_arr.size),
         "n_positive": int(np.sum(labels_arr == 1)),
         "n_negative": int(np.sum(labels_arr == 0)),
-        "scoreable": bool(len(np.unique(labels_arr)) >= 2),
-        "auroc_age": compute_auroc_age(labels_arr, probs, ages_arr, gap=gap),
+        # A fold is scoreable only when the PRIMARY metric is defined: two
+        # classes alone are insufficient if no comparable age pair exists.
+        "scoreable": bool(len(np.unique(labels_arr)) >= 2 and np.isfinite(primary)),
+        "auroc_age": primary,
         "auroc_age_weighted": compute_auroc_weighted(labels_arr, probs, ages_arr, gap=gap),
         "auroc": compute_auroc(labels_arr, probs),
         "auprc": compute_auprc(labels_arr, probs),
