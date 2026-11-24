@@ -18,7 +18,7 @@
 |---|---|
 | **Implemented software** | Full package: metadata audit & join, EDF chunk reader, quality checks, preprocessing, **7 modality feature extractors**, explicit unit harmonization, 6 baselines using all signal families, site-held-out evaluation, patient-cluster bootstrap, benchmark evaluator |
 | **Tested on synthetic fixtures** | Yes — all automated tests use synthetic metadata/EDFs (including a full end-to-end join and chunk-read tests) |
-| **Tested on real data** | **No** — no Kaggle credentials/BDSP terms acceptance; no labelled CSV or EDF downloaded. Public metadata inventory verified: `demographics.csv` is 131,863 bytes, but authenticated retrieval is blocked |
+| **Tested on real data** | **No** - no Kaggle credentials/BDSP terms acceptance; no labelled CSV or EDF downloaded. See [docs/REAL_DATA_VALIDATION.md](docs/REAL_DATA_VALIDATION.md) for the exact, unexecuted workflow. Public metadata inventory verified: `demographics.csv` is 131,863 bytes, but authenticated retrieval is blocked |
 | **Model training actually completed** | Only on synthetic software-test fixtures; no real patient-data model was fitted |
 | **Real performance measured** | **None** — no clinical metrics or scores are claimed |
 
