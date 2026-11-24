@@ -20,6 +20,33 @@ from .units import feature_modality, is_feature_eligible
 
 RANDOM_SEED = 42
 DEMOGRAPHIC_FEATURES = ("Age", "BMI", "Sex_male")
+
+
+class _DropAllMissing:
+    """Fit-time schema freeze: drop columns with no observed training values.
+
+    Applied inside the pipeline so the decision is made from training data only;
+    the same column set is used at transform time, keeping train/test schemas
+    aligned without inventing values.
+    """
+
+    def fit(self, X, y=None):
+        frame = pd.DataFrame(X).copy()
+        self.keep_ = [
+            col for col in frame.columns
+            if not frame[col].isna().all()
+        ]
+        self.dropped_ = [col for col in frame.columns if col not in self.keep_]
+        return self
+
+    def transform(self, X):
+        return pd.DataFrame(X)[self.keep_]
+
+    def get_params(self, deep=True):
+        return {}
+
+    def set_params(self, **params):
+        return self
 # All seven extracted modality families plus explicit missingness indicators.
 # AIRFLOW and SPO2 produce features in feature_table.py and must be visible to
 # signal-only and combined baselines as well.
@@ -170,7 +197,13 @@ def make_model(name: str, random_state: int = RANDOM_SEED) -> Pipeline:
 
     steps: list[tuple[str, object]] = []
     if kind != "none":
+        # Drop columns that are entirely missing in the TRAINING fold only.
+        # The same frozen schema is applied to test, so train/test columns stay
+        # aligned and median imputation never warns about 'all observed values
+        # missing'. This never fabricates a demographic value: a fold with no
+        # recordedSex legitimately has no Sex_male predictor.
         steps.extend([
+            ("drop_all_missing", _DropAllMissing()),
             ("imputer", SimpleImputer(strategy="median", add_indicator=True)),
             ("scaler", StandardScaler()),
         ])
