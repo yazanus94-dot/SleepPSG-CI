@@ -21,6 +21,8 @@
 | **Tested on real data** | **No** - no Kaggle credentials/BDSP terms acceptance; no labelled CSV or EDF downloaded. See [docs/REAL_DATA_VALIDATION.md](docs/REAL_DATA_VALIDATION.md) for the exact, unexecuted workflow and [docs/SCIENTIFIC_AUDIT.md](docs/SCIENTIFIC_AUDIT.md) for the scoring/schema audit. Public metadata inventory verified: `demographics.csv` is 131,863 bytes, but authenticated retrieval is blocked |
 | **Model training actually completed** | Only on synthetic software-test fixtures; no real patient-data model was fitted |
 | **Real performance measured** | **None** — no clinical metrics or scores are claimed |
+| **Independent verification (2026-11-26)** | [`docs/VERIFICATION_REPORT.md`](docs/VERIFICATION_REPORT.md) — 209 tests pass, `ruff` clean, CI green on Python 3.10/3.11/3.12; credentialed access verified **absent**, so items 4–9 of the evidence request remain **not executed** |
+| **Automated guard tests** | `tests/test_evaluate_models_guard.py` — pins the source partition (`S0001`, `I0002`, `I0006` only) and rejects hidden/unknown sources |
 
 See [`AUDIT_REPORT.md`](AUDIT_REPORT.md) for exact counts and limitations.
 
